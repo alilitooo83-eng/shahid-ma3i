@@ -57,44 +57,22 @@ button{
 
 <script>
 
+const video = document.getElementById("video");
+
 async function startCamera(){
 
-    try{
+    try {
 
         const stream = await navigator.mediaDevices.getUserMedia({
-
-            video:{
-                facingMode:"environment"
-            },
-
-            audio:false
-
+            video: true,
+            audio: false
         });
 
-        document.getElementById("video").srcObject = stream;
+        video.srcObject = stream;
 
-    }
+    } catch(error) {
 
-    catch(err){
-
-        try{
-
-            const stream = await navigator.mediaDevices.getUserMedia({
-
-                video:true,
-                audio:false
-
-            });
-
-            document.getElementById("video").srcObject = stream;
-
-        }
-
-        catch(e){
-
-            alert("تعذر تشغيل الكاميرا");
-
-        }
+        alert("خطأ الكاميرا: " + error.message);
 
     }
 
