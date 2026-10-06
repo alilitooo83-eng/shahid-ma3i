@@ -7,68 +7,99 @@
 
 <style>
 body{
-margin:0;
-font-family:Arial,sans-serif;
-background:#0b1020;
-color:#fff;
-display:flex;
-justify-content:center;
-align-items:center;
-height:100vh;
+    margin:0;
+    font-family:Arial,sans-serif;
+    background:#111827;
+    color:white;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
 }
 
 .container{
-width:90%;
-max-width:420px;
-text-align:center;
+    width:95%;
+    max-width:450px;
+    text-align:center;
 }
 
 video{
-width:100%;
-border-radius:12px;
-background:#000;
+    width:100%;
+    border-radius:12px;
+    background:black;
 }
 
 button{
-margin-top:15px;
-padding:14px 24px;
-font-size:18px;
-border:none;
-border-radius:10px;
-background:#2563eb;
-color:white;
-cursor:pointer;
+    margin-top:15px;
+    padding:14px 20px;
+    font-size:18px;
+    border:none;
+    border-radius:10px;
+    cursor:pointer;
+    background:#2563eb;
+    color:white;
 }
 </style>
+
 </head>
 
 <body>
 
 <div class="container">
+
 <h2>شاهد معي</h2>
 
 <video id="video" autoplay playsinline></video>
-
-<br>
 
 <button onclick="startCamera()">تشغيل الكاميرا</button>
 
 </div>
 
 <script>
-const stream = await navigator.mediaDevices.getUserMedia({
-  video: {
-    facingMode: {
-      exact: "environment"
+
+async function startCamera(){
+
+    try{
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+
+            video:{
+                facingMode:"environment"
+            },
+
+            audio:false
+
+        });
+
+        document.getElementById("video").srcObject = stream;
+
     }
-  },
-  audio: false
-});
-document.getElementById("video").srcObject=stream;
-}catch(e){
-alert("تعذر تشغيل الكاميرا");
+
+    catch(err){
+
+        try{
+
+            const stream = await navigator.mediaDevices.getUserMedia({
+
+                video:true,
+                audio:false
+
+            });
+
+            document.getElementById("video").srcObject = stream;
+
+        }
+
+        catch(e){
+
+            alert("تعذر تشغيل الكاميرا");
+
+        }
+
+    }
+
 }
-}
+
 </script>
 
 </body>
