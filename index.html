@@ -51,7 +51,26 @@ button{
 
 <video id="video" autoplay playsinline></video>
 
-<button onclick="startCamera()">تشغيل الكاميرا</button>
+<button onclick="startCamera()">📷 تشغيل الكاميرا</button>
+
+<br><br>
+
+<button onclick="createSession()">🟢 إنشاء جلسة</button>
+
+<br><br>
+
+<div id="sessionCode" style="font-size:22px;font-weight:bold;"></div>
+
+<br>
+
+<input
+id="joinCode"
+placeholder="أدخل رمز الجلسة"
+style="padding:10px;font-size:18px;width:220px;text-align:center;">
+
+<br><br>
+
+<button onclick="joinSession()">🔵 اتصال</button>
 
 </div>
 
@@ -77,7 +96,29 @@ async function startCamera(){
     }
 
 }
+function createSession(){
 
+const code=Math.floor(100000+Math.random()*900000);
+
+document.getElementById("sessionCode").innerHTML="رمز الجلسة: "+code;
+
+}
+
+function joinSession(){
+
+const code=document.getElementById("joinCode").value;
+
+if(code==""){
+
+alert("أدخل رمز الجلسة");
+
+return;
+
+}
+
+alert("سيتم الاتصال بالجلسة: "+code);
+
+    }
 </script>
 
 </body>
