@@ -2,124 +2,50 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>شاهد معي</title>
-
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Shahid Ma3i v0.2</title>
 <style>
-body{
-    margin:0;
-    font-family:Arial,sans-serif;
-    background:#111827;
-    color:white;
-    display:flex;
-    justify-content:center;
-    align-items:center;
-    height:100vh;
-}
-
-.container{
-    width:95%;
-    max-width:450px;
-    text-align:center;
-}
-
-video{
-    width:100%;
-    border-radius:12px;
-    background:black;
-}
-
-button{
-    margin-top:15px;
-    padding:14px 20px;
-    font-size:18px;
-    border:none;
-    border-radius:10px;
-    cursor:pointer;
-    background:#2563eb;
-    color:white;
-}
+body{margin:0;background:#111827;color:#fff;font-family:Arial}
+.container{max-width:480px;margin:auto;padding:20px;text-align:center}
+video{width:100%;background:#000;border-radius:12px}
+button,input{width:100%;padding:14px;margin-top:12px;font-size:18px;border-radius:10px}
+button{background:#2563eb;color:#fff;border:none}
+#sessionCode{margin-top:16px;font-size:22px;font-weight:bold}
 </style>
-
 </head>
-
 <body>
-
 <div class="container">
-
-<h2>شاهد معي</h2>
-
+<h2>🎥 شاهد معي - v0.2</h2>
 <video id="video" autoplay playsinline></video>
-
 <button onclick="startCamera()">📷 تشغيل الكاميرا</button>
-
-<br><br>
-
 <button onclick="createSession()">🟢 إنشاء جلسة</button>
-
-<br><br>
-
-<div id="sessionCode" style="font-size:22px;font-weight:bold;"></div>
-
-<br>
-
-<input
-id="joinCode"
-placeholder="أدخل رمز الجلسة"
-style="padding:10px;font-size:18px;width:220px;text-align:center;">
-
-<br><br>
-
-<button onclick="joinSession()">🔵 اتصال</button>
-
+<div id="sessionCode"></div>
+<input id="joinCode" placeholder="أدخل رمز الجلسة">
+<button onclick="joinSession()">🔵 الانضمام إلى جلسة</button>
 </div>
-
 <script>
-
-const video = document.getElementById("video");
-
+const video=document.getElementById('video');
 async function startCamera(){
-
-    try {
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false
-        });
-
-        video.srcObject = stream;
-
-    } catch(error) {
-
-        alert("خطأ الكاميرا: " + error.message);
-
-    }
-
+ try{
+   const s=await navigator.mediaDevices.getUserMedia({
+     video:{facingMode:"environment"},audio:false});
+   video.srcObject=s;
+ }catch(e){
+   try{
+    const s=await navigator.mediaDevices.getUserMedia({video:true,audio:false});
+    video.srcObject=s;
+   }catch(err){alert("تعذر تشغيل الكاميرا: "+err.message);}
+ }
 }
 function createSession(){
-
-const code=Math.floor(100000+Math.random()*900000);
-
-document.getElementById("sessionCode").innerHTML="رمز الجلسة: "+code;
-
+ const code=Math.floor(100000+Math.random()*900000);
+ document.getElementById("sessionCode").textContent="رمز الجلسة: "+code;
 }
-
 function joinSession(){
-
-const code=document.getElementById("joinCode").value;
-
-if(code==""){
-
-alert("أدخل رمز الجلسة");
-
-return;
-
+ const code=document.getElementById("joinCode").value.trim();
+ if(!code){alert("أدخل رمز الجلسة");return;}
+ alert("سيتم لاحقًا الاتصال بالجلسة: "+code);
 }
-
-alert("سيتم الاتصال بالجلسة: "+code);
-
-    }
 </script>
-
 </body>
 </html>
