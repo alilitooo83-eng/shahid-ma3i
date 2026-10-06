@@ -59,7 +59,11 @@ cursor:pointer;
 async function startCamera(){
 try{
 const stream=await navigator.mediaDevices.getUserMedia({
-video:true,
+video: {
+  facingMode: {
+    ideal: "environment"
+  }
+},
 audio:false
 });
 document.getElementById("video").srcObject=stream;
