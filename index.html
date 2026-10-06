@@ -56,15 +56,13 @@ cursor:pointer;
 </div>
 
 <script>
-async function startCamera(){
-try{
-const stream=await navigator.mediaDevices.getUserMedia({
-video: {
-  facingMode: {
-    ideal: "environment"
-  }
-},
-audio:false
+const stream = await navigator.mediaDevices.getUserMedia({
+  video: {
+    facingMode: {
+      exact: "environment"
+    }
+  },
+  audio: false
 });
 document.getElementById("video").srcObject=stream;
 }catch(e){
