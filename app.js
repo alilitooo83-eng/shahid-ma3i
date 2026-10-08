@@ -1,4 +1,4 @@
-
+```javascript
 const socket = io();
 
 console.log("Shahid Ma3i connected");
@@ -13,19 +13,32 @@ let peerConnection;
 let roomId;
 let pendingCandidates = [];
 
+const inviteRoomId =
+    new URLSearchParams(window.location.search).get("room");
+
 socket.on("connect", () => {
     console.log("Connected to server:", socket.id);
 });
 
 cameraBtn.onclick = async () => {
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-        });
+        if (!localStream) {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: true
+            });
 
-        video.srcObject = localStream;
+            video.srcObject = localStream;
+        }
+
         status.innerText = "الكاميرا والميكروفون يعملان ✅";
+
+        if (inviteRoomId && !roomId) {
+            document.getElementById("joinInput").value =
+                inviteRoomId.toUpperCase();
+
+            joinRoom();
+        }
     } catch (error) {
         console.error(error);
         status.innerText = "تعذّر تشغيل الكاميرا أو الميكروفون";
@@ -45,8 +58,57 @@ function createRoom() {
         }
 
         roomId = result.roomId;
+
         document.getElementById("sessionCode").innerText = roomId;
+
+        const inviteLink = new URL(window.location.href);
+        inviteLink.search = "";
+        inviteLink.searchParams.set("room", roomId);
+
         status.innerText = "تم إنشاء الجلسة ✅";
+
+        let inviteArea = document.getElementById("inviteArea");
+
+        if (!inviteArea) {
+            inviteArea = document.createElement("div");
+            inviteArea.id = "inviteArea";
+            inviteArea.style.marginTop = "12px";
+            document.getElementById("sessionArea")
+                .appendChild(inviteArea);
+        }
+
+        inviteArea.innerHTML = `
+            <p>رابط الدعوة:</p>
+            <input id="inviteLink" readonly>
+            <button id="copyInviteBtn">نسخ رابط الدعوة</button>
+            <button id="shareInviteBtn">مشاركة عبر واتساب</button>
+        `;
+
+        document.getElementById("inviteLink").value =
+            inviteLink.toString();
+
+        document.getElementById("copyInviteBtn").onclick = async () => {
+            try {
+                await navigator.clipboard.writeText(inviteLink.toString());
+                status.innerText = "تم نسخ رابط الدعوة ✅";
+            } catch (error) {
+                const field = document.getElementById("inviteLink");
+                field.select();
+                status.innerText = "حدّد الرابط وانسخه يدويًا";
+            }
+        };
+
+        document.getElementById("shareInviteBtn").onclick = () => {
+            const message = encodeURIComponent(
+                "انضم إليّ في جلسة شاهد معي:\n" +
+                inviteLink.toString()
+            );
+
+            window.open(
+                "https://wa.me/?text=" + message,
+                "_blank"
+            );
+        };
     });
 }
 
@@ -99,10 +161,7 @@ function createPeerConnection() {
         }
     };
 
-    const candidates = pendingCandidates;
-    pendingCandidates = [];
-
-    return candidates;
+    return pendingCandidates;
 }
 
 socket.on("user-joined", async () => {
@@ -140,6 +199,11 @@ socket.on("offer", async (offer) => {
 
         await peerConnection.setRemoteDescription(offer);
 
+        for (const candidate of pendingCandidates) {
+            await peerConnection.addIceCandidate(candidate);
+        }
+        pendingCandidates = [];
+
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
 
@@ -148,11 +212,6 @@ socket.on("offer", async (offer) => {
             answer
         });
 
-        for (const candidate of pendingCandidates) {
-            await peerConnection.addIceCandidate(candidate);
-        }
-
-        pendingCandidates = [];
         status.innerText = "تم الاتصال بالطرف الآخر";
     } catch (error) {
         console.error(error);
@@ -189,3 +248,4 @@ socket.on("ice-candidate", async (candidate) => {
         console.error(error);
     }
 });
+```
