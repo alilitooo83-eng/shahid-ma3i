@@ -8,20 +8,12 @@ document.getElementById("joinBtn").addEventListener("click", joinSession);
 async function startCamera() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
-           const stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-        facingMode: {
-            ideal: "environment"
-        }
-    },
-    audio: false
-});
+            video: true,
             audio: false
         });
 
         video.srcObject = stream;
         status.innerHTML = "✅ الكاميرا تعمل بنجاح";
-
     } catch (e) {
         status.innerHTML = "❌ تعذر تشغيل الكاميرا";
         alert("خطأ: " + e.message);
