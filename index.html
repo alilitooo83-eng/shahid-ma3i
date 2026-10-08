@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 
@@ -20,29 +21,23 @@
         المساعدة المرئية عن بُعد
     </p>
 
-  <div class="video-container">
+    <div class="video-container">
 
-    <video
-        id="remoteVideo"
-        autoplay
-        playsinline>
-    </video>
+        <video id="remoteVideo" autoplay playsinline></video>
 
-    <video
-        id="video"
-        autoplay
-        playsinline
-        muted>
-    </video>
+        <video id="video" autoplay playsinline muted></video>
 
-</div>
+    </div>
+
     <div class="buttons">
 
         <button id="cameraBtn">
-            📷 تشغيل الكاميرا
+            📷 تشغيل الكاميرا والميكروفون
         </button>
 
-        <button onclick="createRoom()">إنشاء جلسة</button>
+        <button onclick="createRoom()">
+            إنشاء جلسة
+        </button>
 
     </div>
 
@@ -50,9 +45,7 @@
 
         <h3>رمز الجلسة</h3>
 
-        <div id="sessionCode">
-            ------
-        </div>
+        <div id="sessionCode">--------</div>
 
     </div>
 
@@ -62,21 +55,20 @@
             id="joinInput"
             type="text"
             maxlength="8"
-            placeholder="أدخل رمز الجلسة">
+            placeholder="أدخل رمز الجلسة"
+            autocomplete="off">
 
-       <button onclick="joinRoom()">انضمام</button>
-
-    </div>
-
-    <div id="status">
-
-        جاهز للعمل
+        <button onclick="joinRoom()">انضمام</button>
 
     </div>
+
+    <div id="status">جاهز للعمل</div>
 
 </div>
+
 <script src="/socket.io/socket.io.js"></script>
 <script src="app.js"></script>
 
 </body>
 </html>
+```
