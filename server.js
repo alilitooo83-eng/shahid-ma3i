@@ -1,58 +1,52 @@
-const socket = io();
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
 
-console.log("Shahid Ma3i connected");
+const app = express();
+const server = http.createServer(app);
 
-const status = document.getElementById("status");
+const io = new Server(server);
 
-let roomId = null;
+app.use(express.static(path.join(__dirname)));
+
+io.on("connection", (socket) => {
+
+    console.log("User connected:", socket.id);
+
+    socket.on("create-room", (roomId) => {
+
+        socket.join(roomId);
+
+        console.log("Room created:", roomId);
+
+    });
 
 
-// الاتصال بالسيرفر
-socket.on("connect", () => {
-    console.log("Connected to server:", socket.id);
+    socket.on("join-room", (roomId) => {
 
-    if (status) {
-        status.innerText = "متصل بالخادم ✅";
-    }
+        socket.join(roomId);
+
+        console.log("User joined room:", roomId);
+
+        socket.to(roomId).emit("user-joined");
+
+    });
+
+
+    socket.on("disconnect", () => {
+
+        console.log("User disconnected:", socket.id);
+
+    });
+
 });
 
 
-// إنشاء جلسة
-function createRoom() {
+const PORT = process.env.PORT || 3000;
 
-    roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+server.listen(PORT, () => {
 
-    socket.emit("create-room", roomId);
-
-    console.log("Room created:", roomId);
-
-    alert("رمز الجلسة: " + roomId);
-}
-
-
-// دخول جلسة
-function joinRoom() {
-
-    const input = document.getElementById("roomInput");
-
-    if (!input.value) {
-        alert("اكتب رمز الجلسة");
-        return;
-    }
-
-    roomId = input.value.toUpperCase();
-
-    socket.emit("join-room", roomId);
-
-    console.log("Joined room:", roomId);
-}
-
-
-// استقبال دخول مستخدم
-socket.on("user-joined", () => {
-
-    console.log("Another user joined");
-
-    alert("تم اتصال المستخدم الآخر ✅");
+    console.log(`Server running on port ${PORT}`);
 
 });
