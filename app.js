@@ -8,7 +8,14 @@ document.getElementById("joinBtn").addEventListener("click", joinSession);
 async function startCamera() {
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
-           video: true
+           const stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+        facingMode: {
+            ideal: "environment"
+        }
+    },
+    audio: false
+});
             audio: false
         });
 
