@@ -1,38 +1,36 @@
-const video = document.getElementById("video");
+const socket = io();
+
+console.log("Shahid Ma3i connected");
+
 const status = document.getElementById("status");
 
-document.getElementById("cameraBtn").addEventListener("click", startCamera);
-document.getElementById("createBtn").addEventListener("click", createSession);
-document.getElementById("joinBtn").addEventListener("click", joinSession);
+socket.on("connect", () => {
+    console.log("Connected to server:", socket.id);
 
-async function startCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false
-        });
-
-        video.srcObject = stream;
-        status.innerHTML = "✅ الكاميرا تعمل بنجاح";
-    } catch (e) {
-        status.innerHTML = "❌ تعذر تشغيل الكاميرا";
-        alert("خطأ: " + e.message);
+    if (status) {
+        status.innerText = "متصل بالخادم ✅";
     }
-}
+});
 
-function createSession() {
-    const code = Math.floor(100000 + Math.random() * 900000);
-    document.getElementById("sessionCode").innerHTML = code;
-    status.innerHTML = "🟢 تم إنشاء الجلسة";
-}
+socket.on("disconnect", () => {
+    console.log("Disconnected");
 
-function joinSession() {
-    const code = document.getElementById("joinInput").value.trim();
-
-    if (code === "") {
-        alert("أدخل رمز الجلسة");
-        return;
+    if (status) {
+        status.innerText = "انقطع الاتصال ❌";
     }
+});
 
-    status.innerHTML = "🔵 سيتم الانضمام إلى الجلسة: " + code;
+
+// إرسال رسالة تجريبية
+function sendTest() {
+    socket.emit("message", {
+        text: "Hello from Shahid Ma3i",
+        time: new Date()
+    });
 }
+
+
+// استقبال الرسائل
+socket.on("message", (data) => {
+    console.log("Received:", data);
+});
