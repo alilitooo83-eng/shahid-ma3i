@@ -1,4 +1,4 @@
-```javascript
+
 const socket = io();
 
 console.log("Shahid Ma3i connected");
@@ -248,4 +248,3 @@ socket.on("ice-candidate", async (candidate) => {
         console.error(error);
     }
 });
-```
