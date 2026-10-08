@@ -4,6 +4,7 @@ console.log("Shahid Ma3i connected");
 
 const status = document.getElementById("status");
 
+
 socket.on("connect", () => {
     console.log("Connected to server:", socket.id);
 
@@ -11,6 +12,7 @@ socket.on("connect", () => {
         status.innerText = "متصل بالخادم ✅";
     }
 });
+
 
 socket.on("disconnect", () => {
     console.log("Disconnected");
@@ -21,16 +23,53 @@ socket.on("disconnect", () => {
 });
 
 
-// إرسال رسالة تجريبية
-function sendTest() {
-    socket.emit("message", {
-        text: "Hello from Shahid Ma3i",
-        time: new Date()
-    });
+// إنشاء جلسة
+function createRoom() {
+
+    const roomId = Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase();
+
+    socket.emit("create-room", roomId);
+
+    console.log("Room created:", roomId);
+
+
+    const sessionCode = document.getElementById("sessionCode");
+
+    if (sessionCode) {
+        sessionCode.innerText = roomId;
+    }
+
 }
 
 
-// استقبال الرسائل
-socket.on("message", (data) => {
-    console.log("Received:", data);
+// الانضمام إلى جلسة
+function joinRoom() {
+
+    const input = document.getElementById("joinInput");
+
+    if (!input || !input.value) {
+        alert("أدخل رمز الجلسة");
+        return;
+    }
+
+
+    const roomId = input.value.toUpperCase();
+
+    socket.emit("join-room", roomId);
+
+    console.log("Joined room:", roomId);
+
+}
+
+
+// عندما يدخل شخص آخر
+socket.on("user-joined", () => {
+
+    console.log("User joined the room");
+
+    alert("تم اتصال المستخدم الآخر ✅");
+
 });
