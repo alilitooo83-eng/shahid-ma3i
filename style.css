@@ -53,6 +53,10 @@ h1{
     object-fit:cover;
 }
 
+#video.video-small{
+    position:absolute;
+}
+
 .buttons{
     display:flex;
     gap:10px;
@@ -71,6 +75,13 @@ button{
 }
 
 button:hover{
+    background:#1d4ed8;
+}
+#switchCameraBtn{
+    background:#2563eb;
+}
+
+#switchCameraBtn:hover{
     background:#1d4ed8;
 }
 
@@ -148,6 +159,31 @@ input{
     }
 
     button{
+        /* تكبير الفيديو */
+.video-fullscreen{
+    position:fixed !important;
+    inset:0;
+    width:100vw !important;
+    height:100vh !important;
+    border-radius:0 !important;
+    z-index:1000;
+    object-fit:contain;
+    background:#000;
+    cursor:zoom-out;
+}
+
+.video-small{
+    position:absolute;
+    width:120px;
+    height:170px;
+    bottom:15px;
+    right:15px;
+    border-radius:12px;
+    border:2px solid #fff;
+    object-fit:cover;
+    z-index:1001;
+    cursor:pointer;
+}
         width:100%;
     }
 
