@@ -66,6 +66,7 @@ function createRoom() {
         inviteLink.searchParams.set("room", roomId);
 
         status.innerText = "تم إنشاء الجلسة ✅";
+        document.getElementById("sessionArea").style.display = "block";
 
         let inviteArea = document.getElementById("inviteArea");
 
@@ -134,6 +135,7 @@ function joinRoom() {
 
         roomId = result.roomId;
         status.innerText = "تم الانضمام، جارٍ الاتصال...";
+        document.querySelector(".join").style.display = "none";
     });
 }
 
