@@ -8,11 +8,7 @@ const remoteVideo = document.getElementById("remoteVideo");
 let isFullscreen = false;
 
 remoteVideo.onclick = () => {
-
-    isFullscreen = !isFullscreen;
-
-    remoteVideo.classList.toggle("video-fullscreen", isFullscreen);
-
+    alert("تم الضغط على الفيديو");
 };
 const status = document.getElementById("status");
 const cameraBtn = document.getElementById("cameraBtn");
