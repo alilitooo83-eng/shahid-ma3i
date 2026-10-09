@@ -1,11 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>شاهد معي | Shahid Ma3i</title>
 
     <link rel="stylesheet" href="style.css">
@@ -23,9 +21,18 @@
 
     <div class="video-container">
 
-        <video id="remoteVideo" autoplay playsinline></video>
+        <video
+            id="remoteVideo"
+            autoplay
+            playsinline>
+        </video>
 
-        <video id="video" autoplay playsinline muted></video>
+        <video
+            id="video"
+            autoplay
+            playsinline
+            muted>
+        </video>
 
     </div>
 
@@ -35,8 +42,8 @@
             📷 تشغيل الكاميرا والميكروفون
         </button>
 
-        <button onclick="createRoom()">
-            إنشاء جلسة
+        <button id="createRoomBtn" onclick="createRoom()">
+            📤 إنشاء رابط الدعوة
         </button>
 
     </div>
@@ -45,7 +52,11 @@
 
         <h3>رمز الجلسة</h3>
 
-        <div id="sessionCode">--------</div>
+        <div id="sessionCode">
+            --------
+        </div>
+
+        <div id="inviteArea"></div>
 
     </div>
 
@@ -58,11 +69,15 @@
             placeholder="أدخل رمز الجلسة"
             autocomplete="off">
 
-        <button onclick="joinRoom()">انضمام</button>
+        <button onclick="joinRoom()">
+            انضمام
+        </button>
 
     </div>
 
-    <div id="status">جاهز للعمل</div>
+    <div id="status">
+        جاهز للعمل
+            </div>
 
 </div>
 
@@ -70,5 +85,5 @@
 <script src="app.js"></script>
 
 </body>
+
 </html>
-```
