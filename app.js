@@ -58,8 +58,10 @@ function createRoom() {
         }
 
         roomId = result.roomId;
+        console.log("Room ID =", roomId);
 
         document.getElementById("sessionCode").innerText = roomId;
+        console.log("Session code updated");
 
         const inviteLink = new URL(window.location.href);
         inviteLink.search = "";
@@ -79,6 +81,7 @@ function createRoom() {
         }
 
         inviteArea.innerHTML = `
+        console.log("Invite area found");
             <p>رابط الدعوة:</p>
             <input id="inviteLink" readonly>
             <button id="copyInviteBtn">نسخ رابط الدعوة</button>
