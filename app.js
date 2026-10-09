@@ -25,10 +25,12 @@ socket.on("connect", () => {
 cameraBtn.onclick = async () => {
     try {
         if (!localStream) {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                video: true,
-                audio: true
-            });
+           localStream = await navigator.mediaDevices.getUserMedia({
+    video: {
+        facingMode: currentFacingMode
+    },
+    audio: true
+});
 
             video.srcObject = localStream;
         }
@@ -289,10 +291,10 @@ switchCameraBtn.onclick = async () => {
         );
 
     if (sender) {
-        sender.replaceTrack(
-            localStream.getVideoTracks()[0]
-        );
-    }
+    await sender.replaceTrack(
+        localStream.getVideoTracks()[0]
+    );
+}
 
 }
         
