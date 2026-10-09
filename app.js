@@ -7,8 +7,10 @@ const video = document.getElementById("video");
 const remoteVideo = document.getElementById("remoteVideo");
 const status = document.getElementById("status");
 const cameraBtn = document.getElementById("cameraBtn");
+const switchCameraBtn = document.getElementById("switchCameraBtn");
 
 let localStream;
+let currentFacingMode = "user";
 let peerConnection;
 let roomId;
 let pendingCandidates = [];
@@ -253,3 +255,60 @@ socket.on("ice-candidate", async (candidate) => {
         console.error(error);
     }
 });
+switchCameraBtn.onclick = async () => {
+
+    if (!localStream) {
+        status.innerText = "شغّل الكاميرا أولًا";
+        return;
+    }
+
+    currentFacingMode =
+        currentFacingMode === "user"
+            ? "environment"
+            : "user";
+
+    localStream.getTracks().forEach(track => track.stop());
+
+    try {
+
+        localStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: currentFacingMode
+            },
+            audio: true
+        });
+
+        video.srcObject = localStream;
+        if (peerConnection) {
+
+    const sender = peerConnection
+        .getSenders()
+        .find(sender =>
+            sender.track &&
+            sender.track.kind === "video"
+        );
+
+    if (sender) {
+        sender.replaceTrack(
+            localStream.getVideoTracks()[0]
+        );
+    }
+
+}
+        
+
+        status.innerText =
+            currentFacingMode === "user"
+                ? "تم تشغيل الكاميرا الأمامية ✅"
+                : "تم تشغيل الكاميرا الخلفية ✅";
+
+    } catch (error) {
+
+        console.error(error);
+
+        status.innerText =
+            "تعذّر تبديل الكاميرا";
+
+    }
+
+};
