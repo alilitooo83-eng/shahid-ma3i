@@ -81,7 +81,7 @@ function createRoom() {
         }
 
         inviteArea.innerHTML = `
-        console.log("Invite area found");
+       
             <p>رابط الدعوة:</p>
             <input id="inviteLink" readonly>
             <button id="copyInviteBtn">نسخ رابط الدعوة</button>
