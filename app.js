@@ -5,6 +5,15 @@ console.log("Shahid Ma3i connected");
 
 const video = document.getElementById("video");
 const remoteVideo = document.getElementById("remoteVideo");
+let isFullscreen = false;
+
+remoteVideo.onclick = () => {
+
+    isFullscreen = !isFullscreen;
+
+    remoteVideo.classList.toggle("video-fullscreen", isFullscreen);
+
+};
 const status = document.getElementById("status");
 const cameraBtn = document.getElementById("cameraBtn");
 const switchCameraBtn = document.getElementById("switchCameraBtn");
