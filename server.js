@@ -33,6 +33,8 @@ io.on("connection", (socket) => {
     });
 
     socket.on("join-room", (roomId, callback) => {
+        console.log("JOIN REQUEST:", roomId, socket.id);
+        console.log("Rooms:", [...rooms.keys()]);
         if (typeof roomId !== "string") return;
 
         roomId = roomId.trim().toUpperCase();
