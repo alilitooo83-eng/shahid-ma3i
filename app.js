@@ -5,9 +5,7 @@ console.log("Shahid Ma3i connected");
 
 const video = document.getElementById("video");
 const remoteVideo = document.getElementById("remoteVideo");
-let isFullscreen = false;
 
-const videoContainer = document.querySelector(".video-container");
 
 let isFullscreen = false;
 
