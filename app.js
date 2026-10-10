@@ -30,6 +30,24 @@ let currentFacingMode = "user";
 let peerConnection;
 let roomId;
 let pendingCandidates = [];
+// ---------- WebRTC Configuration ----------
+
+const rtcConfig = {
+
+    iceServers: [
+
+        {
+            urls: [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302"
+            ]
+        }
+
+    ],
+
+    iceCandidatePoolSize: 10
+
+};
 
 const inviteRoomId =
     new URLSearchParams(window.location.search).get("room");
@@ -163,11 +181,12 @@ function joinRoom() {
 }
 
 function createPeerConnection() {
+
     if (peerConnection) {
         peerConnection.close();
     }
 
-    peerConnection = new RTCPeerConnection();
+    peerConnection = new RTCPeerConnection(rtcConfig);
 
     localStream.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStream);
@@ -177,72 +196,60 @@ function createPeerConnection() {
         remoteVideo.srcObject = event.streams[0];
     };
 
+    peerConnection.onconnectionstatechange = () => {
+        console.log("Connection:", peerConnection.connectionState);
+
+        switch (peerConnection.connectionState) {
+
+            case "connected":
+                status.innerText = "تم الاتصال بنجاح ✅";
+                break;
+
+            case "connecting":
+                status.innerText = "جارٍ الاتصال...";
+                break;
+
+            case "failed":
+                status.innerText = "فشل الاتصال";
+                break;
+
+            case "disconnected":
+                status.innerText = "انقطع الاتصال";
+                break;
+
+            case "closed":
+                status.innerText = "تم إنهاء الجلسة";
+                break;
+        }
+    };
+
+    peerConnection.oniceconnectionstatechange = () => {
+        console.log("ICE:", peerConnection.iceConnectionState);
+    };
+
+    peerConnection.onicegatheringstatechange = () => {
+        console.log("Gathering:", peerConnection.iceGatheringState);
+    };
+
+    peerConnection.onsignalingstatechange = () => {
+        console.log("Signaling:", peerConnection.signalingState);
+    };
+
     peerConnection.onicecandidate = (event) => {
+
         if (event.candidate && roomId) {
+
             socket.emit("ice-candidate", {
                 roomId,
                 candidate: event.candidate
             });
+
         }
+
     };
 
     return pendingCandidates;
 }
-
-socket.on("user-joined", async () => {
-    try {
-        if (!localStream) {
-            status.innerText = "شغّل الكاميرا أولًا";
-            return;
-        }
-
-        createPeerConnection();
-
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-
-        socket.emit("offer", {
-            roomId,
-            offer
-        });
-
-        status.innerText = "جارٍ الاتصال بالطرف الآخر...";
-    } catch (error) {
-        console.error(error);
-        status.innerText = "تعذّر بدء الاتصال";
-    }
-});
-
-socket.on("offer", async (offer) => {
-    try {
-        if (!localStream) {
-            status.innerText = "شغّل الكاميرا أولًا";
-            return;
-        }
-
-        createPeerConnection();
-
-        await peerConnection.setRemoteDescription(offer);
-
-        for (const candidate of pendingCandidates) {
-            await peerConnection.addIceCandidate(candidate);
-        }
-        pendingCandidates = [];
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit("answer", {
-            roomId,
-            answer
-        });
-
-        status.innerText = "تم الاتصال بالطرف الآخر";
-    } catch (error) {
-        console.error(error);
-        status.innerText = "حدث خطأ أثناء الاتصال";
-    }
-});
 
 socket.on("answer", async (answer) => {
     try {
