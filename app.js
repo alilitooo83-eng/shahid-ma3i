@@ -8,7 +8,33 @@ const remoteVideo = document.getElementById("remoteVideo");
 let isFullscreen = false;
 
 remoteVideo.onclick = () => {
-    alert("تم الضغط على الفيديو");
+
+    if (!isFullscreen) {
+
+        remoteVideo.style.position = "fixed";
+        remoteVideo.style.top = "0";
+        remoteVideo.style.left = "0";
+        remoteVideo.style.width = "100vw";
+        remoteVideo.style.height = "100vh";
+        remoteVideo.style.zIndex = "9999";
+        remoteVideo.style.objectFit = "contain";
+        remoteVideo.style.background = "#000";
+
+    } else {
+
+        remoteVideo.style.position = "";
+        remoteVideo.style.top = "";
+        remoteVideo.style.left = "";
+        remoteVideo.style.width = "";
+        remoteVideo.style.height = "";
+        remoteVideo.style.zIndex = "";
+        remoteVideo.style.objectFit = "";
+        remoteVideo.style.background = "";
+
+    }
+
+    isFullscreen = !isFullscreen;
+
 };
 const status = document.getElementById("status");
 const cameraBtn = document.getElementById("cameraBtn");
