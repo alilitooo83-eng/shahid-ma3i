@@ -20,21 +20,21 @@
     </section>
 
     <section class="buttons" aria-label="أزرار التحكم">
-      <button id="cameraBtn" type="button">📷 تشغيل الكاميرا والميكروفون</button>
+      <button id="cameraBtn" type="button">📷 تشغيل الكاميرا</button>
       <button id="switchCameraBtn" type="button">🔄 تبديل الكاميرا</button>
       <button id="createRoomBtn" type="button">📤 إنشاء رابط الدعوة</button>
+      <button id="joinBtn" type="button">✅ انضمام للجلسة</button>
       <button id="endRoomBtn" type="button">⛔ إنهاء الجلسة</button>
     </section>
 
     <section id="sessionArea" hidden>
-      <h3>رمز الجلسة</h3>
+      <h3>Room ID</h3>
       <div id="sessionCode">--------</div>
       <div id="inviteArea"></div>
     </section>
 
-    <section class="join" hidden>
-      <input id="joinInput" type="text" maxlength="24" placeholder="أدخل رمز الجلسة" autocomplete="off" inputmode="latin">
-      <button id="joinBtn" type="button">انضمام</button>
+    <section class="join">
+      <input id="joinInput" type="text" maxlength="24" placeholder="أدخل Room ID أو افتح الرابط" autocomplete="off" inputmode="latin">
     </section>
 
     <div id="status" role="status" aria-live="polite">جاهز للعمل</div>
