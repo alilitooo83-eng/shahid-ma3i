@@ -86,6 +86,22 @@ button:hover {
   background: #1d4ed8;
 }
 
+button.success {
+  background: #16a34a;
+}
+
+button.success:hover {
+  background: #15803d;
+}
+
+button.secondary {
+  background: #0f766e;
+}
+
+button.secondary:hover {
+  background: #115e59;
+}
+
 .join {
   margin-top: 20px;
 }
@@ -107,42 +123,66 @@ input {
   margin: 15px 0;
 }
 
+.session-card {
+  margin-top: 18px;
+  padding-top: 8px;
+}
+
+.session-row {
+  margin-bottom: 16px;
+}
+
+.invite-card {
+  width: 100%;
+  text-align: right;
+  background: linear-gradient(180deg, #0f172a, #111827);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.invite-label {
+  font-size: 16px;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 10px;
+}
+
+.invite-link {
+  display: block;
+  width: 100%;
+  padding: 14px;
+  border-radius: 14px;
+  background: #334155;
+  color: #fff;
+  text-decoration: none;
+  direction: ltr;
+  text-align: left;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  user-select: all;
+  font-size: 15px;
+  line-height: 1.7;
+  min-height: 56px;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.invite-actions button {
+  flex: 1 1 180px;
+}
+
 #status {
   margin-top: 20px;
   padding: 12px;
   background: #1e293b;
   border-radius: 10px;
-}
-
-#inviteArea {
-  margin-top: 20px;
-}
-
-#inviteArea p {
-  margin-bottom: 10px;
-  color: #cbd5e1;
-}
-
-#inviteLink {
-  width: 100%;
-  padding: 12px;
-  border: none;
-  border-radius: 10px;
-  background: #334155;
-  color: white;
-  margin-bottom: 10px;
-  direction: ltr;
-}
-
-#copyInviteBtn,
-#shareInviteBtn {
-  margin: 5px;
-  background: #16a34a;
-}
-
-#copyInviteBtn:hover,
-#shareInviteBtn:hover {
-  background: #15803d;
 }
 
 @media (max-width: 768px) {
@@ -152,7 +192,8 @@ input {
     border-radius: 0;
   }
 
-  .buttons {
+  .buttons,
+  .invite-actions {
     flex-direction: column;
   }
 
@@ -163,5 +204,10 @@ input {
 
   button {
     width: 100%;
+  }
+
+  .invite-link {
+    font-size: 14px;
+    padding: 12px;
   }
 }
