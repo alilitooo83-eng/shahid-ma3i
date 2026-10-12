@@ -46,7 +46,7 @@ const socketRoomMap = new Map();
 const roomTimers = new Map();
 const ROOM_TTL_MS = 60 * 60 * 1000;
 const MAX_ROOM_MEMBERS = 2;
-const ROOM_ID_BYTES = 8;
+const ROOM_ID_BYTES = 4;
 const SESSION_TOKEN_BYTES = 16;
 
 function randomToken(bytes) {
@@ -193,9 +193,8 @@ io.on("connection", (socket) => {
   socket.on("join-room", (data, callback) => {
     try {
       const roomId = normalizeRoomId(data && data.roomId);
-      const sessionToken = data && typeof data.sessionToken === "string" ? data.sessionToken.trim().toUpperCase() : "";
-      if (!roomId || !sessionToken) {
-        safeAck(callback, { success: false, message: "رمز الجلسة أو التوكن غير صالح" });
+      if (!roomId) {
+        safeAck(callback, { success: false, message: "رمز الجلسة غير صالح" });
         return;
       }
 
@@ -212,12 +211,6 @@ io.on("connection", (socket) => {
 
       if (room.members.size >= MAX_ROOM_MEMBERS && !room.members.has(socket.id)) {
         safeAck(callback, { success: false, message: "الجلسة مكتملة" });
-        return;
-      }
-
-      const creatorToken = room.tokens.get(room.creator);
-      if (!creatorToken || creatorToken !== sessionToken) {
-        safeAck(callback, { success: false, message: "توكين الجلسة غير صحيح" });
         return;
       }
 
