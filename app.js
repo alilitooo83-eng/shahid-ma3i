@@ -13,11 +13,14 @@ const cameraBtn = document.getElementById("cameraBtn");
 const switchCameraBtn = document.getElementById("switchCameraBtn");
 const createRoomBtn = document.getElementById("createRoomBtn");
 const joinBtn = document.getElementById("joinBtn");
+const endRoomBtn = document.getElementById("endRoomBtn");
 const sessionCodeEl = document.getElementById("sessionCode");
 const sessionArea = document.getElementById("sessionArea");
 const joinInput = document.getElementById("joinInput");
 const joinSection = document.querySelector(".join");
 const inviteArea = document.getElementById("inviteArea");
+const inviteLinkEl = document.getElementById("inviteLink");
+const copyInviteBtn = document.getElementById("copyInviteBtn");
 
 const TURN_URL = (window.__TURN_URL__ || "").trim();
 const TURN_USERNAME = (window.__TURN_USERNAME__ || "").trim();
@@ -193,9 +196,15 @@ function resetSession(message = "تمت إعادة تعيين الجلسة") {
   isCreatingRoom = false;
   isJoiningRoom = false;
   retryCounter = 0;
-  setSessionState(SESSION_STATE.IDLE, message);
+  if (sessionCodeEl) sessionCodeEl.textContent = "--------";
+  if (inviteArea) inviteArea.hidden = true;
+  if (inviteLinkEl) {
+    inviteLinkEl.textContent = "";
+    inviteLinkEl.href = "#";
+  }
   if (sessionArea) sessionArea.hidden = true;
   if (joinSection) joinSection.hidden = false;
+  setSessionState(SESSION_STATE.IDLE, message);
 }
 
 async function createLocalStream() {
@@ -221,6 +230,34 @@ async function addLocalTracks() {
     if (!existingKinds.has(track.kind)) {
       peerConnection.addTrack(track, localStream);
     }
+  }
+}
+
+function createInviteLink(room) {
+  return `${window.location.origin}/?room=${encodeURIComponent(room)}`;
+}
+
+function showInviteLink(room) {
+  const inviteLink = createInviteLink(room);
+  if (inviteLinkEl) {
+    inviteLinkEl.href = inviteLink;
+    inviteLinkEl.textContent = inviteLink;
+    inviteLinkEl.target = "_blank";
+  }
+  if (inviteArea) inviteArea.hidden = false;
+  return inviteLink;
+}
+
+async function copyInviteLinkToClipboard(link) {
+  if (!link) return false;
+  try {
+    await navigator.clipboard.writeText(link);
+    setStatus("تم نسخ رابط الدعوة ✅");
+    return true;
+  } catch (error) {
+    console.error("Failed to copy invite link", error);
+    setStatus("تعذّر نسخ الرابط، انسخه يدويًا من الشاشة");
+    return false;
   }
 }
 
@@ -428,11 +465,12 @@ async function createRoom() {
       sessionToken = result.sessionToken;
       isCreator = true;
       if (sessionCodeEl) sessionCodeEl.textContent = roomId;
-      if (inviteArea) inviteArea.hidden = false;
       if (sessionArea) sessionArea.hidden = false;
       if (joinSection) joinSection.hidden = true;
+      const inviteLink = showInviteLink(roomId);
       ensurePeerConnection().then(() => createOffer(false));
       setSessionState(SESSION_STATE.CONNECTING, "تم إنشاء الجلسة بنجاح، بانتظار الطرف الآخر...");
+      copyInviteBtn && copyInviteBtn.addEventListener("click", () => copyInviteLinkToClipboard(inviteLink));
     });
   } catch (error) {
     isCreatingRoom = false;
@@ -466,6 +504,7 @@ async function joinRoom() {
       isCreator = false;
       if (sessionCodeEl) sessionCodeEl.textContent = roomId;
       if (sessionArea) sessionArea.hidden = false;
+      if (inviteArea) inviteArea.hidden = true;
       if (joinSection) joinSection.hidden = true;
       setSessionState(SESSION_STATE.CONNECTING, "تم الانضمام، بانتظار اتصال الطرف الآخر...");
       ensurePeerConnection();
@@ -519,21 +558,16 @@ socket.on("reconnect", () => {
   }
 });
 
-if (cameraBtn) cameraBtn.addEventListener("click", createRoom);
+if (cameraBtn) cameraBtn.addEventListener("click", createLocalStream);
+if (switchCameraBtn) switchCameraBtn.addEventListener("click", switchCamera);
 if (createRoomBtn) createRoomBtn.addEventListener("click", createRoom);
 if (joinBtn) joinBtn.addEventListener("click", joinRoom);
-if (switchCameraBtn) switchCameraBtn.addEventListener("click", switchCamera);
-if (localVideo) {
-  localVideo.addEventListener("click", () => {
-    isFullscreen = !isFullscreen;
-    document.body.classList.toggle("fullscreen-mode", isFullscreen);
-  });
-}
-
-window.addEventListener("beforeunload", () => {
-  stopTracks(localStream);
-  cleanup();
+if (endRoomBtn) endRoomBtn.addEventListener("click", endSession);
+if (copyInviteBtn) copyInviteBtn.addEventListener("click", async () => {
+  if (!roomId) return;
+  await copyInviteLinkToClipboard(createInviteLink(roomId));
 });
 
-setStatus("جاهز للاتصال");
-if (inviteRoomId && joinInput && !joinInput.value) joinInput.value = inviteRoomId.toUpperCase();
+if (inviteRoomId && joinInput && !joinInput.value) {
+  joinInput.value = inviteRoomId.toUpperCase();
+}
