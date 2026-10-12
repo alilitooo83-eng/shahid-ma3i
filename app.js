@@ -28,43 +28,24 @@ const TURN_USERNAME = (window.__TURN_USERNAME__ || "").trim();
 const TURN_PASSWORD = (window.__TURN_PASSWORD__ || "").trim();
 const invitedRoomId = new URLSearchParams(window.location.search).get("room");
 
-const SESSION_STATE = Object.freeze({
-  IDLE: "IDLE",
-  LOCAL_READY: "LOCAL_READY",
-  CREATING_ROOM: "CREATING_ROOM",
-  JOINING_ROOM: "JOINING_ROOM",
-  CONNECTING: "CONNECTING",
-  CONNECTED: "CONNECTED",
-  RECOVERING: "RECOVERING",
-  ENDED: "ENDED",
-  ERROR: "ERROR"
-});
-
-const ICE_FLUSH_TIMEOUT_MS = 5000;
-
-let state = SESSION_STATE.IDLE;
 let localStream = null;
-let pc = null;
+let peerConnection = null;
 let roomId = null;
 let sessionToken = null;
-let isCreator = false;
-let currentFacingMode = "user";
-let isCreatingRoom = false;
-let isJoiningRoom = false;
-let endSessionRequested = false;
-let rtcConfig = null;
 let candidateQueue = [];
-let seenCandidateKeys = new Set();
-let localControlsInitialized = false;
-let roomEndedByRemote = false;
+let pendingCandidateKeys = new Set();
+let currentFacingMode = "user";
+let sessionEnded = false;
+let roomJoined = false;
+let roomCreated = false;
+let inviteLink = "";
+
+function log(tag) {
+  console.log(tag);
+}
 
 function setStatus(message) {
   if (statusEl) statusEl.textContent = message;
-}
-
-function setSessionState(nextState, message) {
-  state = nextState;
-  if (message) setStatus(message);
 }
 
 function stopTracks(stream) {
@@ -72,86 +53,15 @@ function stopTracks(stream) {
   for (const track of stream.getTracks()) track.stop();
 }
 
-function safeAck(callback, payload) {
-  if (typeof callback === "function") callback(payload);
+function resetButtons() {
+  if (cameraBtn) cameraBtn.disabled = false;
+  if (switchCameraBtn) switchCameraBtn.disabled = true;
+  if (createRoomBtn) createRoomBtn.disabled = false;
+  if (joinBtn) joinBtn.disabled = false;
+  if (endRoomBtn) endRoomBtn.disabled = true;
 }
 
-function getRtcConfig() {
-  if (rtcConfig) return rtcConfig;
-  const iceServers = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
-  if (TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
-    iceServers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_PASSWORD });
-  }
-  rtcConfig = { iceServers, iceCandidatePoolSize: 10 };
-  return rtcConfig;
-}
-
-function emitWithSession(event, payload = {}, callback) {
-  if (!roomId || !sessionToken) {
-    safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
-    return false;
-  }
-  socket.emit(event, { ...payload, roomId, sessionToken }, callback);
-  return true;
-}
-
-function getCandidateKey(candidate) {
-  if (!candidate) return "";
-  return [candidate.candidate || "", candidate.sdpMid || "", candidate.sdpMLineIndex ?? ""].join("|");
-}
-
-function enqueueCandidate(candidate) {
-  const key = getCandidateKey(candidate);
-  if (!key || seenCandidateKeys.has(key)) return;
-  seenCandidateKeys.add(key);
-  candidateQueue.push(candidate);
-}
-
-async function flushCandidateQueue() {
-  if (!pc || !pc.remoteDescription) return;
-  while (candidateQueue.length > 0) {
-    const candidate = candidateQueue.shift();
-    try {
-      await pc.addIceCandidate(candidate);
-    } catch (error) {
-      console.error("Failed to add queued ICE candidate", error);
-    }
-  }
-}
-
-function clearCandidateQueue() {
-  candidateQueue = [];
-  seenCandidateKeys = new Set();
-}
-
-function resetSessionReferences() {
-  roomId = null;
-  sessionToken = null;
-  isCreator = false;
-  endSessionRequested = false;
-  isCreatingRoom = false;
-  isJoiningRoom = false;
-  roomEndedByRemote = false;
-}
-
-function cleanupPeerConnection() {
-  if (pc) {
-    pc.ontrack = null;
-    pc.onicecandidate = null;
-    pc.onconnectionstatechange = null;
-    pc.oniceconnectionstatechange = null;
-    pc.onsignalingstatechange = null;
-    try {
-      pc.close();
-    } catch (error) {
-      console.error("Failed to close RTCPeerConnection", error);
-    }
-  }
-  pc = null;
-  clearCandidateQueue();
-}
-
-function clearInviteUI() {
+function setInitialUi() {
   if (sessionCodeEl) sessionCodeEl.textContent = "--------";
   if (inviteArea) inviteArea.hidden = true;
   if (inviteLinkEl) {
@@ -160,183 +70,180 @@ function clearInviteUI() {
   }
   if (sessionArea) sessionArea.hidden = true;
   if (joinSection) joinSection.hidden = false;
-}
-
-function resetToInitialState(message = "جاهز للعمل") {
-  cleanupPeerConnection();
-  stopTracks(localStream);
-  localStream = null;
   if (localVideo) localVideo.srcObject = null;
   if (remoteVideo) remoteVideo.srcObject = null;
-  clearInviteUI();
-  resetSessionReferences();
-  setSessionState(SESSION_STATE.IDLE, message);
+  resetButtons();
 }
 
-function setInviteLink(room) {
-  const link = `${window.location.origin}/?room=${encodeURIComponent(room)}`;
-  if (inviteLinkEl) {
-    inviteLinkEl.href = link;
-    inviteLinkEl.textContent = link;
-    inviteLinkEl.target = "_blank";
-    inviteLinkEl.rel = "noopener noreferrer";
+function getRtcConfig() {
+  const iceServers = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+  if (TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
+    iceServers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_PASSWORD });
   }
-  if (inviteArea) inviteArea.hidden = false;
-  return link;
+  return { iceServers, iceCandidatePoolSize: 10 };
 }
 
-async function copyInviteLink(link) {
-  if (!link) return false;
-  try {
-    await navigator.clipboard.writeText(link);
-    setStatus("تم نسخ رابط الدعوة ✅");
-    return true;
-  } catch (error) {
-    console.error("copy failed", error);
-    setStatus("تعذّر نسخ الرابط");
+function emitWithSession(event, payload = {}, callback) {
+  if (!roomId || !sessionToken) {
+    if (typeof callback === "function") callback({ success: false, message: "لا توجد جلسة نشطة" });
     return false;
   }
+  socket.emit(event, { ...payload, roomId, sessionToken }, callback);
+  return true;
 }
 
-function shareInviteLink(link) {
-  if (!link) return;
-  if (navigator.share) {
-    navigator.share({ title: "شاهد معي", text: "رابط الجلسة", url: link }).catch((error) => {
-      console.error("share failed", error);
-    });
-    return;
+function candidateKey(candidate) {
+  return [candidate?.candidate || "", candidate?.sdpMid || "", candidate?.sdpMLineIndex ?? ""].join("|");
+}
+
+function queueCandidate(candidate) {
+  const key = candidateKey(candidate);
+  if (!key || pendingCandidateKeys.has(key)) return;
+  pendingCandidateKeys.add(key);
+  candidateQueue.push(candidate);
+}
+
+async function flushCandidateQueue() {
+  if (!peerConnection || !peerConnection.remoteDescription) return;
+  while (candidateQueue.length) {
+    const candidate = candidateQueue.shift();
+    try {
+      await peerConnection.addIceCandidate(candidate);
+      log("ICE_RECEIVED");
+    } catch (error) {
+      console.error(error);
+    }
   }
-  window.open(`https://wa.me/?text=${encodeURIComponent(link)}`, "_blank", "noopener,noreferrer");
 }
 
-async function createLocalStream() {
+function clearCandidateQueue() {
+  candidateQueue = [];
+  pendingCandidateKeys = new Set();
+}
+
+async function ensureLocalStream() {
   if (localStream) return localStream;
   localStream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: currentFacingMode },
     audio: true
   });
   if (localVideo) localVideo.srcObject = localStream;
-  setSessionState(SESSION_STATE.LOCAL_READY, "تم تشغيل الكاميرا ✅");
+  if (switchCameraBtn) switchCameraBtn.disabled = false;
+  if (endRoomBtn) endRoomBtn.disabled = false;
+  setStatus("تم تشغيل الكاميرا ✅");
   return localStream;
 }
 
-function createPeerConnection() {
-  const connection = new RTCPeerConnection(getRtcConfig());
+function ensurePeerConnection() {
+  if (peerConnection) return peerConnection;
 
-  connection.ontrack = (event) => {
+  peerConnection = new RTCPeerConnection(getRtcConfig());
+
+  if (localStream) {
+    for (const track of localStream.getTracks()) {
+      peerConnection.addTrack(track, localStream);
+    }
+  }
+
+  peerConnection.ontrack = (event) => {
     const stream = event.streams && event.streams[0];
     if (stream && remoteVideo) remoteVideo.srcObject = stream;
   };
 
-  connection.onicecandidate = (event) => {
-    if (!event.candidate || !roomId || !sessionToken || endSessionRequested) return;
+  peerConnection.onicecandidate = (event) => {
+    if (!event.candidate || !roomId || !sessionToken || sessionEnded) return;
+    log("ICE_SENT");
     emitWithSession("ice-candidate", { candidate: event.candidate });
   };
 
-  connection.onconnectionstatechange = () => {
-    if (connection.connectionState === "connected") {
-      setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بنجاح ✅");
-      return;
-    }
-    if (connection.connectionState === "connecting") {
-      setSessionState(SESSION_STATE.CONNECTING, "جارٍ الاتصال...");
-      return;
-    }
-    if (["failed", "disconnected"].includes(connection.connectionState)) {
-      setStatus("فقد الاتصال مؤقتًا");
-    }
-  };
-
-  connection.oniceconnectionstatechange = () => {
-    if (connection.iceConnectionState === "failed") {
-      setStatus("فشل ICE");
-    }
-  };
-
-  return connection;
-}
-
-async function ensurePeerConnection() {
-  if (!pc) {
-    pc = createPeerConnection();
-    if (localStream) {
-      for (const track of localStream.getTracks()) {
-        pc.addTrack(track, localStream);
-      }
-    }
-  }
-  return pc;
+  return peerConnection;
 }
 
 async function createOffer() {
-  if (!isCreator || !pc || !roomId || endSessionRequested) return;
-  if (pc.signalingState === "have-local-offer") return;
-
-  try {
-    await ensurePeerConnection();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    emitWithSession("offer", { offer });
-    setSessionState(SESSION_STATE.CONNECTING, "تم إرسال عرض الاتصال...");
-  } catch (error) {
-    console.error("createOffer failed", error);
-    setStatus("تعذّر إنشاء العرض");
-  }
+  if (!peerConnection || sessionEnded) return;
+  log("CREATE_OFFER");
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  emitWithSession("offer", { offer });
 }
 
 async function createAnswer() {
-  if (!pc || endSessionRequested) return;
-  try {
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    emitWithSession("answer", { answer });
-    await flushCandidateQueue();
-    setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بالطرف الآخر ✅");
-  } catch (error) {
-    console.error("createAnswer failed", error);
-    setStatus("تعذّر إنشاء الإجابة");
-  }
+  if (!peerConnection || sessionEnded) return;
+  const answer = await peerConnection.createAnswer();
+  await peerConnection.setLocalDescription(answer);
+  emitWithSession("answer", { answer });
 }
 
-async function handleIncomingOffer(payload) {
-  if (!payload || !payload.offer || endSessionRequested) return;
+async function handleOffer(payload) {
+  if (!payload?.offer || sessionEnded) return;
+  log("OFFER_RECEIVED");
   await ensurePeerConnection();
+  await peerConnection.setRemoteDescription(payload.offer);
+  await createAnswer();
+}
+
+async function handleAnswer(payload) {
+  if (!payload?.answer || !peerConnection || sessionEnded) return;
+  log("ANSWER_RECEIVED");
+  await peerConnection.setRemoteDescription(payload.answer);
+  await flushCandidateQueue();
+}
+
+async function handleCandidate(payload) {
+  if (!payload?.candidate || sessionEnded) return;
+  if (!peerConnection || !peerConnection.remoteDescription) {
+    queueCandidate(payload.candidate);
+    return;
+  }
   try {
-    await pc.setRemoteDescription(payload.offer);
-    await createAnswer();
+    await peerConnection.addIceCandidate(payload.candidate);
+    log("ICE_RECEIVED");
   } catch (error) {
-    console.error("handleIncomingOffer failed", error);
-    setStatus("تعذّر استقبال العرض");
+    console.error(error);
   }
 }
 
-async function handleIncomingAnswer(payload) {
-  if (!payload || !payload.answer || !pc || endSessionRequested) return;
-  try {
-    await pc.setRemoteDescription(payload.answer);
-    await flushCandidateQueue();
-    setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بالطرف الآخر ✅");
-  } catch (error) {
-    console.error("handleIncomingAnswer failed", error);
-    setStatus("تعذّر استقبال الإجابة");
+async function hideInviteCard() {
+  if (inviteArea) inviteArea.hidden = true;
+  if (inviteLinkEl) {
+    inviteLinkEl.textContent = "";
+    inviteLinkEl.href = "#";
   }
 }
 
-async function handleIncomingCandidate(payload) {
-  if (!payload || !payload.candidate || endSessionRequested) return;
-  try {
-    if (!pc || !pc.remoteDescription) {
-      enqueueCandidate(payload.candidate);
-      return;
+async function cleanup() {
+  sessionEnded = true;
+  roomJoined = false;
+  roomCreated = false;
+  candidateQueue = [];
+  pendingCandidateKeys = new Set();
+
+  stopTracks(localStream);
+  localStream = null;
+
+  if (peerConnection) {
+    try {
+      peerConnection.ontrack = null;
+      peerConnection.onicecandidate = null;
+      peerConnection.close();
+    } catch (error) {
+      console.error(error);
     }
-    await pc.addIceCandidate(payload.candidate);
-  } catch (error) {
-    console.error("Failed to handle ICE candidate", error);
   }
+  peerConnection = null;
+
+  if (localVideo) localVideo.srcObject = null;
+  if (remoteVideo) remoteVideo.srcObject = null;
+
+  roomId = null;
+  sessionToken = null;
+  await hideInviteCard();
+  setInitialUi();
+  log("CLEANUP_DONE");
 }
 
-async function cleanupSession({ notifyRemote = false } = {}) {
-  endSessionRequested = true;
+async function endSession(notifyRemote = true) {
+  sessionEnded = true;
   if (notifyRemote) {
     emitWithSession("end-session", {}, () => {});
   }
@@ -345,37 +252,19 @@ async function cleanupSession({ notifyRemote = false } = {}) {
   } catch (error) {
     console.error(error);
   }
-  cleanupPeerConnection();
-  stopTracks(localStream);
-  localStream = null;
-  if (localVideo) localVideo.srcObject = null;
-  if (remoteVideo) remoteVideo.srcObject = null;
-  if (inviteArea) inviteArea.hidden = true;
-  if (inviteLinkEl) {
-    inviteLinkEl.textContent = "";
-    inviteLinkEl.href = "#";
-  }
-  if (sessionCodeEl) sessionCodeEl.textContent = "--------";
-  if (sessionArea) sessionArea.hidden = true;
-  if (joinSection) joinSection.hidden = false;
-  roomId = null;
-  sessionToken = null;
-  isCreator = false;
-  isCreatingRoom = false;
-  isJoiningRoom = false;
-  roomEndedByRemote = false;
-  setSessionState(SESSION_STATE.IDLE, "تم إنهاء الجلسة");
+  await cleanup();
 }
 
 async function switchCamera() {
-  if (!localStream) return;
+  if (!localStream || sessionEnded) return;
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
-  stopTracks(localStream);
+  const oldStream = localStream;
+  stopTracks(oldStream);
   localStream = null;
-  await createLocalStream();
-  if (pc) {
+  await ensureLocalStream();
+  if (peerConnection) {
     const videoTrack = localStream.getVideoTracks()[0];
-    for (const sender of pc.getSenders()) {
+    for (const sender of peerConnection.getSenders()) {
       if (sender.track && sender.track.kind === "video" && videoTrack) {
         await sender.replaceTrack(videoTrack);
       }
@@ -384,141 +273,142 @@ async function switchCamera() {
 }
 
 async function createRoom() {
-  if (isCreatingRoom) return;
-  isCreatingRoom = true;
-  setSessionState(SESSION_STATE.CREATING_ROOM, "جارٍ إنشاء الجلسة...");
+  sessionEnded = false;
+  await ensureLocalStream();
+  socket.emit("create-room", async (result) => {
+    if (!result?.success) {
+      setStatus(result?.message || "تعذّر إنشاء الجلسة");
+      return;
+    }
 
-  try {
-    await createLocalStream();
-    socket.emit("create-room", async (result) => {
-      isCreatingRoom = false;
-      if (!result || !result.success) {
-        setSessionState(SESSION_STATE.ERROR, (result && result.message) || "تعذّر إنشاء الجلسة");
-        return;
+    roomCreated = true;
+    roomJoined = true;
+    roomId = result.roomId;
+    sessionToken = result.sessionToken;
+    if (sessionCodeEl) sessionCodeEl.textContent = roomId;
+    if (sessionArea) sessionArea.hidden = false;
+    if (joinSection) joinSection.hidden = true;
+    inviteLink = `${window.location.origin}/?room=${encodeURIComponent(roomId)}`;
+    if (inviteArea) inviteArea.hidden = false;
+    if (inviteLinkEl) {
+      inviteLinkEl.textContent = inviteLink;
+      inviteLinkEl.href = inviteLink;
+      inviteLinkEl.target = "_blank";
+      inviteLinkEl.rel = "noopener noreferrer";
+    }
+    ensurePeerConnection();
+    log("USER_JOINED");
+    await createOffer();
+    if (copyInviteBtn) copyInviteBtn.onclick = () => navigator.clipboard.writeText(inviteLink).catch(() => {});
+    if (shareInviteBtn) shareInviteBtn.onclick = () => {
+      if (navigator.share) {
+        navigator.share({ title: "شاهد معي", url: inviteLink }).catch(() => {});
+      } else {
+        window.open(`https://wa.me/?text=${encodeURIComponent(inviteLink)}`, "_blank", "noopener,noreferrer");
       }
-      roomId = result.roomId;
-      sessionToken = result.sessionToken;
-      isCreator = true;
-      if (sessionCodeEl) sessionCodeEl.textContent = roomId;
-      const inviteLink = setInviteLink(roomId);
-      if (sessionArea) sessionArea.hidden = false;
-      if (joinSection) joinSection.hidden = true;
-      await ensurePeerConnection();
-      await createOffer();
-      copyInviteLink(inviteLink);
-    });
-  } catch (error) {
-    isCreatingRoom = false;
-    console.error("createRoom failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر إنشاء الجلسة");
-  }
+    };
+  });
 }
 
 async function joinRoom(targetRoomId) {
-  if (isJoiningRoom) return;
-  isJoiningRoom = true;
-  setSessionState(SESSION_STATE.JOINING_ROOM, "جارٍ الانضمام للجلسة...");
+  sessionEnded = false;
+  await ensureLocalStream();
+  socket.emit("join-room", { roomId: targetRoomId }, async (result) => {
+    if (!result?.success) {
+      setStatus(result?.message || "تعذّر الانضمام للجلسة");
+      return;
+    }
 
+    roomJoined = true;
+    roomCreated = false;
+    roomId = result.roomId;
+    sessionToken = result.sessionToken;
+    if (sessionCodeEl) sessionCodeEl.textContent = roomId;
+    if (sessionArea) sessionArea.hidden = false;
+    if (joinSection) joinSection.hidden = true;
+    await ensurePeerConnection();
+    log("USER_JOINED");
+    await createOffer();
+  });
+}
+
+async function handleEndSessionFromRemote() {
+  log("ROOM_ENDED");
+  await cleanup();
+}
+
+cameraBtn?.addEventListener("click", async () => {
   try {
-    await createLocalStream();
-    socket.emit("join-room", { roomId: targetRoomId }, async (result) => {
-      isJoiningRoom = false;
-      if (!result || !result.success) {
-        setSessionState(SESSION_STATE.ERROR, (result && result.message) || "تعذّر الانضمام للجلسة");
-        return;
-      }
-      roomId = result.roomId;
-      sessionToken = result.sessionToken;
-      isCreator = false;
-      if (sessionCodeEl) sessionCodeEl.textContent = roomId;
-      if (sessionArea) sessionArea.hidden = false;
-      if (joinSection) joinSection.hidden = true;
-      setInviteLink(roomId);
-      await ensurePeerConnection();
-      setSessionState(SESSION_STATE.CONNECTING, `تم الانضمام إلى الجلسة: ${roomId}`);
-    });
+    await ensureLocalStream();
   } catch (error) {
-    isJoiningRoom = false;
-    console.error("joinRoom failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر الانضمام للجلسة");
+    console.error(error);
+    setStatus("تعذّر تشغيل الكاميرا");
   }
-}
-
-function wireControlsOnce() {
-  if (localControlsInitialized) return;
-  localControlsInitialized = true;
-
-  if (cameraBtn) cameraBtn.onclick = async () => {
-    try {
-      await createLocalStream();
-    } catch (error) {
-      console.error(error);
-      setStatus("تعذّر تشغيل الكاميرا");
-    }
-  };
-
-  if (switchCameraBtn) switchCameraBtn.onclick = async () => {
-    try {
-      await switchCamera();
-    } catch (error) {
-      console.error(error);
-      setStatus("تعذّر تبديل الكاميرا");
-    }
-  };
-
-  if (createRoomBtn) createRoomBtn.onclick = () => createRoom();
-  if (joinBtn) joinBtn.onclick = () => joinRoom((joinInput && joinInput.value || "").trim().replace(/^.*[?&]room=([^&]+).*$/i, "$1"));
-  if (endRoomBtn) endRoomBtn.onclick = () => cleanupSession({ notifyRemote: true });
-
-  if (copyInviteBtn) copyInviteBtn.onclick = () => {
-    if (inviteLinkEl && inviteLinkEl.href && inviteLinkEl.href !== "#") copyInviteLink(inviteLinkEl.href);
-  };
-
-  if (shareInviteBtn) shareInviteBtn.onclick = () => {
-    if (inviteLinkEl && inviteLinkEl.href && inviteLinkEl.href !== "#") shareInviteLink(inviteLinkEl.href);
-  };
-
-  if (remoteVideo) remoteVideo.onclick = () => {
-    document.body.classList.toggle("fullscreen-mode");
-  };
-
-  if (inviteLinkEl) inviteLinkEl.onclick = (event) => {
-    event.preventDefault();
-    const link = inviteLinkEl.href;
-    if (link && link !== "#") window.open(link, "_blank", "noopener,noreferrer");
-  };
-}
-
-function bindJoinInputFromLink() {
-  if (!joinInput) return;
-  if (invitedRoomId) joinInput.value = invitedRoomId;
-}
-
-socket.on("offer", handleIncomingOffer);
-socket.on("answer", handleIncomingAnswer);
-socket.on("ice-candidate", handleIncomingCandidate);
-socket.on("peer-left", () => setStatus("غادر الطرف الآخر الجلسة"));
-socket.on("room-ended", async () => {
-  roomEndedByRemote = true;
-  await cleanupSession({ notifyRemote: false });
-});
-socket.on("connect_error", () => setStatus("تعذّر الاتصال بالخادم"));
-socket.on("disconnect", () => {
-  if (!endSessionRequested) setStatus("تم قطع الاتصال بالخادم");
 });
 
-window.addEventListener("beforeunload", () => {
+switchCameraBtn?.addEventListener("click", async () => {
   try {
-    if (roomId && sessionToken) socket.emit("leave", { roomId, sessionToken });
+    await switchCamera();
   } catch (error) {
     console.error(error);
   }
 });
 
-wireControlsOnce();
-bindJoinInputFromLink();
-setStatus("جاهز للعمل");
+createRoomBtn?.addEventListener("click", async () => {
+  try {
+    await createRoom();
+  } catch (error) {
+    console.error(error);
+    setStatus("تعذّر إنشاء الجلسة");
+  }
+});
 
+joinBtn?.addEventListener("click", async () => {
+  const code = (joinInput?.value || invitedRoomId || "").trim().toUpperCase();
+  if (!code) return setStatus("أدخل رمز الجلسة");
+  try {
+    await joinRoom(code);
+  } catch (error) {
+    console.error(error);
+    setStatus("تعذّر الانضمام للجلسة");
+  }
+});
+
+endRoomBtn?.addEventListener("click", async () => {
+  try {
+    await endSession(true);
+  } catch (error) {
+    console.error(error);
+  }
+});
+
+socket.on("user-joined", async () => {
+  log("USER_JOINED");
+  await ensurePeerConnection();
+  await createOffer();
+});
+
+socket.on("offer", handleOffer);
+socket.on("answer", handleAnswer);
+socket.on("ice-candidate", handleCandidate);
+socket.on("room-ended", async () => {
+  await handleEndSessionFromRemote();
+});
+socket.on("peer-left", async () => {
+  log("ROOM_ENDED");
+  await cleanup();
+});
+
+socket.on("connect", () => {
+  if (sessionEnded) return;
+  setStatus("متصل بالخادم");
+});
+
+socket.on("disconnect", () => {
+  if (!sessionEnded) setStatus("انقطع الاتصال بالخادم");
+});
+
+setInitialUi();
 if (invitedRoomId) {
-  setStatus("تم العثور على رابط دعوة، أدخل إلى الجلسة من الزر");
+  if (joinInput) joinInput.value = invitedRoomId.toUpperCase();
 }
