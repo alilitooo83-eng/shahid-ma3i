@@ -137,6 +137,30 @@ function detachSocket(socketId) {
   io.to(roomId).emit("peer-left", { roomId, userId: socketId });
 }
 
+app.get("/ice-config", (_req, res) => {
+  const iceServers = [
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+  ];
+
+  const turnUrls = (process.env.TURN_URL || "")
+    .split(",")
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const turnUsername = process.env.TURN_USERNAME || "";
+  const turnPassword = process.env.TURN_PASSWORD || "";
+
+  if (turnUrls.length && turnUsername && turnPassword) {
+    iceServers.push({
+      urls: turnUrls,
+      username: turnUsername,
+      credential: turnPassword
+    });
+  }
+
+  res.set("Cache-Control", "no-store");
+  res.json({ iceServers, turnConfigured: iceServers.length > 1 });
+});
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 io.on("connection", (socket) => {
