@@ -1,92 +1,50 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>شاهد معي | Shahid Ma3i</title>
-
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Shahid Ma3i is a production-ready remote visual assistance app with WebRTC, Socket.io, and TURN support.">
+  <title>شاهد معي | Shahid Ma3i</title>
+  <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
+  <main class="container" id="main-content">
+    <header>
+      <h1>🎥 شاهد معي</h1>
+      <p class="subtitle">المساعدة المرئية عن بُعد</p>
+    </header>
 
-<div class="container">
+    <section class="video-container" aria-label="منطقة الفيديو">
+      <video id="remoteVideo" autoplay playsinline></video>
+      <video id="video" autoplay playsinline muted></video>
+    </section>
 
-    <h1>🎥 شاهد معي</h1>
+    <section class="buttons" aria-label="أزرار التحكم">
+      <button id="cameraBtn" type="button">📷 تشغيل الكاميرا والميكروفون</button>
+      <button id="switchCameraBtn" type="button">🔄 تبديل الكاميرا</button>
+      <button id="createRoomBtn" type="button">📤 إنشاء رابط الدعوة</button>
+    </section>
 
-    <p class="subtitle">
-        المساعدة المرئية عن بُعد
-    </p>
+    <section id="sessionArea" hidden>
+      <h3>رمز الجلسة</h3>
+      <div id="sessionCode">--------</div>
+      <div id="inviteArea"></div>
+    </section>
 
-    <div class="video-container">
+    <section class="join" hidden>
+      <input id="joinInput" type="text" maxlength="8" placeholder="أدخل رمز الجلسة" autocomplete="off" inputmode="latin">
+      <button id="joinBtn" type="button">انضمام</button>
+    </section>
 
-        <video
-            id="remoteVideo"
-            autoplay
-            playsinline>
-        </video>
+    <div id="status" role="status" aria-live="polite">جاهز للعمل</div>
+  </main>
 
-        <video
-            id="video"
-            autoplay
-            playsinline
-            muted>
-        </video>
-
-    </div>
-
-    <div class="buttons">
-
-        <button id="cameraBtn">
-            📷 تشغيل الكاميرا والميكروفون
-        </button>
-        <button id="switchCameraBtn">
-            🔄 تبديل الكاميرا
-        </button>
-
-        <button id="createRoomBtn" onclick="createRoom()">
-            📤 إنشاء رابط الدعوة
-        </button>
-
-    </div>
-
-    <div id="sessionArea" style="display:none;">
-
-        <h3>رمز الجلسة</h3>
-
-        <div id="sessionCode">
-            --------
-        </div>
-
-        <div id="inviteArea"></div>
-
-    </div>
-
-    <div class="join" style="display:none;">
-
-        <input
-            id="joinInput"
-            type="text"
-            maxlength="8"
-            placeholder="أدخل رمز الجلسة"
-            autocomplete="off">
-
-        <button onclick="joinRoom()">
-            انضمام
-        </button>
-
-    </div>
-
-    <div id="status">
-        جاهز للعمل
-    </div>
-
-</div>
-
-<script src="/socket.io/socket.io.js"></script>
-<script src="app.js"></script>
-
+  <script>
+    window.__TURN_URL__ = window.__TURN_URL__ || "";
+    window.__TURN_USERNAME__ = window.__TURN_USERNAME__ || "";
+    window.__TURN_PASSWORD__ = window.__TURN_PASSWORD__ || "";
+  </script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
 </body>
-
 </html>
