@@ -45,9 +45,33 @@ const rooms = new Map();
 const socketRoomMap = new Map();
 const roomTimers = new Map();
 const ROOM_TTL_MS = 60 * 60 * 1000;
+const MAX_ROOM_MEMBERS = 2;
+const ROOM_ID_BYTES = 8;
+const SESSION_TOKEN_BYTES = 16;
+
+function randomToken(bytes) {
+  return crypto.randomBytes(bytes).toString("hex").toUpperCase();
+}
 
 function buildRoomId() {
-  return crypto.randomBytes(3).toString("hex").toUpperCase();
+  return randomToken(ROOM_ID_BYTES);
+}
+
+function buildSessionToken() {
+  return randomToken(SESSION_TOKEN_BYTES);
+}
+
+function normalizeRoomId(roomId) {
+  return typeof roomId === "string" ? roomId.trim().toUpperCase() : "";
+}
+
+function getRoomForSocket(socketId) {
+  const roomId = socketRoomMap.get(socketId);
+  return roomId ? rooms.get(roomId) || null : null;
+}
+
+function isRoomMember(room, socketId) {
+  return Boolean(room && room.members.has(socketId));
 }
 
 function clearRoomTimer(roomId) {
@@ -61,9 +85,11 @@ function destroyRoom(roomId, reason = "room-ended") {
   if (!room) return;
 
   clearRoomTimer(roomId);
+
   for (const memberId of room.members) {
     socketRoomMap.delete(memberId);
   }
+
   io.to(roomId).emit(reason, { roomId });
   rooms.delete(roomId);
   console.log(`[room] destroyed ${roomId} (${reason})`);
@@ -82,9 +108,29 @@ function scheduleRoomCleanup(roomId) {
   roomTimers.set(roomId, timer);
 }
 
-function getRoomBySocket(socketId) {
-  const roomId = socketRoomMap.get(socketId);
-  return roomId ? rooms.get(roomId) || null : null;
+function issueRoomSignal(room, socket) {
+  room.tokens.set(socket.id, buildSessionToken());
+  return room.tokens.get(socket.id);
+}
+
+function validateSession(socket, payload) {
+  const room = getRoomForSocket(socket.id);
+  if (!room) return { ok: false, message: "SESSION_NOT_FOUND" };
+  if (!isRoomMember(room, socket.id)) return { ok: false, message: "NOT_ROOM_MEMBER" };
+
+  const token = payload && typeof payload.sessionToken === "string" ? payload.sessionToken : "";
+  const expected = room.tokens.get(socket.id);
+  if (!token || token !== expected) return { ok: false, message: "INVALID_SESSION_TOKEN" };
+
+  return { ok: true, room };
+}
+
+function safeAck(callback, payload) {
+  if (typeof callback === "function") callback(payload);
+}
+
+function validateSignalPayload(payload, field) {
+  return Boolean(payload && typeof payload.roomId === "string" && payload[field]);
 }
 
 function detachSocket(socketId) {
@@ -96,6 +142,8 @@ function detachSocket(socketId) {
   if (!room) return;
 
   room.members.delete(socketId);
+  room.tokens.delete(socketId);
+
   if (room.members.size === 0) {
     scheduleRoomCleanup(roomId);
     return;
@@ -117,54 +165,86 @@ io.on("connection", (socket) => {
   socket.on("create-room", (callback) => {
     try {
       const roomId = buildRoomId();
-      rooms.set(roomId, { creator: socket.id, members: new Set([socket.id]), createdAt: Date.now() });
+      const sessionToken = buildSessionToken();
+      rooms.set(roomId, {
+        creator: socket.id,
+        members: new Set([socket.id]),
+        tokens: new Map([[socket.id, sessionToken]]),
+        createdAt: Date.now(),
+        ended: false
+      });
       socketRoomMap.set(socket.id, roomId);
       socket.join(roomId);
       scheduleRoomCleanup(roomId);
-      if (typeof callback === "function") callback({ success: true, roomId });
+      safeAck(callback, { success: true, roomId, sessionToken, creatorId: socket.id });
       console.log(`[room] created ${roomId}`);
     } catch (error) {
       console.error("[room] create error", error);
-      if (typeof callback === "function") callback({ success: false, message: "تعذّر إنشاء الجلسة" });
+      safeAck(callback, { success: false, message: "تعذّر إنشاء الجلسة" });
     }
   });
 
-  socket.on("join-room", (roomId, callback) => {
+  socket.on("join-room", (data, callback) => {
     try {
-      if (typeof roomId !== "string") {
-        if (typeof callback === "function") callback({ success: false, message: "رمز الجلسة غير صالح" });
+      const roomId = normalizeRoomId(data && data.roomId);
+      const sessionToken = data && typeof data.sessionToken === "string" ? data.sessionToken.trim().toUpperCase() : "";
+      if (!roomId || !sessionToken) {
+        safeAck(callback, { success: false, message: "رمز الجلسة أو التوكن غير صالح" });
         return;
       }
 
-      const normalizedRoomId = roomId.trim().toUpperCase();
-      const room = rooms.get(normalizedRoomId);
+      const room = rooms.get(roomId);
       if (!room) {
-        if (typeof callback === "function") callback({ success: false, message: "الجلسة غير موجودة" });
+        safeAck(callback, { success: false, message: "الجلسة غير موجودة" });
         return;
       }
 
-      if (room.members.size >= 2 && !room.members.has(socket.id)) {
-        if (typeof callback === "function") callback({ success: false, message: "الجلسة مكتملة" });
+      if (room.ended) {
+        safeAck(callback, { success: false, message: "انتهت الجلسة" });
+        return;
+      }
+
+      if (room.members.size >= MAX_ROOM_MEMBERS && !room.members.has(socket.id)) {
+        safeAck(callback, { success: false, message: "الجلسة مكتملة" });
+        return;
+      }
+
+      const creatorToken = room.tokens.get(room.creator);
+      if (!creatorToken || creatorToken !== sessionToken) {
+        safeAck(callback, { success: false, message: "توكين الجلسة غير صحيح" });
         return;
       }
 
       room.members.add(socket.id);
-      socketRoomMap.set(socket.id, normalizedRoomId);
-      socket.join(normalizedRoomId);
-      scheduleRoomCleanup(normalizedRoomId);
-      if (typeof callback === "function") callback({ success: true, roomId: normalizedRoomId, creatorId: room.creator });
-      socket.to(normalizedRoomId).emit("user-joined", { roomId: normalizedRoomId, userId: socket.id });
-      console.log(`[room] ${socket.id} joined ${normalizedRoomId}`);
+      const memberToken = issueRoomSignal(room, socket);
+      socketRoomMap.set(socket.id, roomId);
+      socket.join(roomId);
+      scheduleRoomCleanup(roomId);
+
+      safeAck(callback, {
+        success: true,
+        roomId,
+        sessionToken: memberToken,
+        creatorId: room.creator
+      });
+
+      socket.to(roomId).emit("user-joined", { roomId, userId: socket.id });
+      console.log(`[room] ${socket.id} joined ${roomId}`);
     } catch (error) {
       console.error("[room] join error", error);
-      if (typeof callback === "function") callback({ success: false, message: "تعذّر الانضمام" });
+      safeAck(callback, { success: false, message: "تعذّر الانضمام" });
     }
   });
 
   socket.on("offer", (data) => {
     try {
-      if (!data || typeof data.roomId !== "string" || !rooms.has(data.roomId) || !data.offer) return;
-      socket.to(data.roomId).emit("offer", data.offer);
+      const validation = validateSession(socket, data);
+      if (!validation.ok || !validateSignalPayload(data, "offer")) return;
+      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("offer", {
+        offer: data.offer,
+        roomId: data.roomId,
+        senderId: socket.id
+      });
     } catch (error) {
       console.error("[signal] offer error", error);
     }
@@ -172,8 +252,13 @@ io.on("connection", (socket) => {
 
   socket.on("answer", (data) => {
     try {
-      if (!data || typeof data.roomId !== "string" || !rooms.has(data.roomId) || !data.answer) return;
-      socket.to(data.roomId).emit("answer", data.answer);
+      const validation = validateSession(socket, data);
+      if (!validation.ok || !validateSignalPayload(data, "answer")) return;
+      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("answer", {
+        answer: data.answer,
+        roomId: data.roomId,
+        senderId: socket.id
+      });
     } catch (error) {
       console.error("[signal] answer error", error);
     }
@@ -181,16 +266,53 @@ io.on("connection", (socket) => {
 
   socket.on("ice-candidate", (data) => {
     try {
-      if (!data || typeof data.roomId !== "string" || !rooms.has(data.roomId) || !data.candidate) return;
-      socket.to(data.roomId).emit("ice-candidate", data.candidate);
+      const validation = validateSession(socket, data);
+      if (!validation.ok || !validateSignalPayload(data, "candidate")) return;
+      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("ice-candidate", {
+        candidate: data.candidate,
+        roomId: data.roomId,
+        senderId: socket.id
+      });
     } catch (error) {
       console.error("[signal] ice-candidate error", error);
     }
   });
 
-  socket.on("end-session", () => {
-    const room = getRoomBySocket(socket.id);
-    if (room) destroyRoom(socketRoomMap.get(socket.id), "room-ended");
+  socket.on("leave", (_data, callback) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room) {
+      safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
+      return;
+    }
+
+    detachSocket(socket.id);
+    safeAck(callback, { success: true });
+  });
+
+  socket.on("reconnect", (_data, callback) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room || !isRoomMember(room, socket.id)) {
+      safeAck(callback, { success: false, message: "لا توجد جلسة لإعادة الاتصال" });
+      return;
+    }
+    safeAck(callback, { success: true, roomId: socketRoomMap.get(socket.id) });
+  });
+
+  socket.on("end-session", (_data, callback) => {
+    const room = getRoomForSocket(socket.id);
+    if (!room || room.ended) {
+      safeAck(callback, { success: false, message: "الجلسة منتهية بالفعل" });
+      return;
+    }
+
+    if (room.creator !== socket.id) {
+      safeAck(callback, { success: false, message: "فقط منشئ الجلسة يستطيع إنهاؤها" });
+      return;
+    }
+
+    room.ended = true;
+    destroyRoom(socketRoomMap.get(socket.id), "room-ended");
+    safeAck(callback, { success: true });
   });
 
   socket.on("disconnect", (reason) => {
