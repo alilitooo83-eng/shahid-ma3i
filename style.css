@@ -1,190 +1,186 @@
-body{
-    margin:0;
-    font-family:Arial,sans-serif;
-    background:#0f172a;
-    color:#fff;
-.container{
-    width:95%;
-    max-width:900px;
-    margin:20px auto;
-    text-align:center;
-    background:#1e293b;
-    border-radius:20px;
-    padding:20px;
-    box-shadow:0 20px 50px rgba(0,0,0,.35);
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #0f172a;
+    color: #fff;
 }
 
-r;
+.container {
+    width: 95%;
+    max-width: 900px;
+    margin: 20px auto;
+    text-align: center;
+    background: #1e293b;
+    border-radius: 20px;
+    padding: 20px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
 }
 
-h1{
-    margin-bottom:5px;
+h1 {
+    margin-bottom: 5px;
 }
 
-.subtitle{
-    color:#cbd5e1;
-    margin-bottom:20px;
+.subtitle {
+    color: #cbd5e1;
+    margin-bottom: 20px;
 }
 
-.video-container{
-    position:relative;
-    width:100%;
-    height:75vh;
-    background:#000;
-    border-radius:15px;
-    overflow:hidden;
+.video-container {
+    position: relative;
+    width: 100%;
+    height: 75vh;
+    background: #000;
+    border-radius: 15px;
+    overflow: hidden;
 }
 
-#remoteVideo{
-    width:100%;
-    height:100%;
-    object-fit:cover;
+#remoteVideo {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
-
-#video{
-    position:absolute;
-    width:120px;
-    height:170px;
-    bottom:15px;
-    right:15px;
-    border-radius:12px;
-    border:2px solid white;
-    object-fit:cover;
+#video {
+    position: absolute;
+    width: 120px;
+    height: 170px;
+    bottom: 15px;
+    right: 15px;
+    border-radius: 12px;
+    border: 2px solid #fff;
+    object-fit: cover;
+    z-index: 2;
 }
 
-#video.video-small{
-    position:absolute;
+.video-fullscreen {
+    position: fixed !important;
+    inset: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0 !important;
+    z-index: 1000;
+    object-fit: contain;
+    background: #000;
+    cursor: zoom-out;
 }
 
-.buttons{
-    display:flex;
-    gap:10px;
-    margin-top:15px;
+.video-small {
+    position: absolute;
+    width: 120px;
+    height: 170px;
+    bottom: 15px;
+    right: 15px;
+    border-radius: 12px;
+    border: 2px solid #fff;
+    object-fit: cover;
+    z-index: 1001;
+    cursor: pointer;
 }
 
-button{
-    flex:1;
-    padding:14px;
-    font-size:17px;
-    border:none;
-    border-radius:10px;
-    background:#2563eb;
-    color:white;
-    cursor:pointer;
+.buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
 }
 
-button:hover{
-    background:#1d4ed8;
-}
-#switchCameraBtn{
-    background:#2563eb;
-}
-
-#switchCameraBtn:hover{
-    background:#1d4ed8;
-}
-
-.join{
-    margin-top:20px;
+button {
+    flex: 1;
+    padding: 14px;
+    font-size: 17px;
+    border: none;
+    border-radius: 10px;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
 }
 
-input{
-    width:100%;
-    padding:12px;
-    font-size:18px;
-    border-radius:10px;
-    border:none;
-    text-align:center;
-    margin-bottom:10px;
+button:hover {
+    background: #1d4ed8;
 }
 
-#sessionCode{
-    font-size:28px;
-    font-weight:bold;
-    color:#22c55e;
-    margin:15px 0;
+#switchCameraBtn {
+    background: #2563eb;
 }
 
-#status{
-    margin-top:20px;
-    padding:12px;
-    background:#1e293b;
-    border-radius:10px;
-}
-#inviteArea{
-    margin-top:20px;
+#switchCameraBtn:hover {
+    background: #1d4ed8;
 }
 
-#inviteArea p{
-    margin-bottom:10px;
-    color:#cbd5e1;
+.join {
+    margin-top: 20px;
 }
 
-#inviteLink{
-    width:100%;
-    padding:12px;
-    border:none;
-    border-radius:10px;
-    background:#334155;
-    color:white;
-    margin-bottom:10px;
-    direction:ltr;
+input {
+    width: 100%;
+    padding: 12px;
+    font-size: 18px;
+    border-radius: 10px;
+    border: none;
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+#sessionCode {
+    font-size: 28px;
+    font-weight: bold;
+    color: #22c55e;
+    margin: 15px 0;
+}
+
+#status {
+    margin-top: 20px;
+    padding: 12px;
+    background: #1e293b;
+    border-radius: 10px;
+}
+
+#inviteArea {
+    margin-top: 20px;
+}
+
+#inviteArea p {
+    margin-bottom: 10px;
+    color: #cbd5e1;
+}
+
+#inviteLink {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: #334155;
+    color: white;
+    margin-bottom: 10px;
+    direction: ltr;
 }
 
 #copyInviteBtn,
-#shareInviteBtn{
-    margin:5px;
-    background:#16a34a;
+#shareInviteBtn {
+    margin: 5px;
+    background: #16a34a;
 }
 
 #copyInviteBtn:hover,
-#shareInviteBtn:hover{
-    background:#15803d;
-}
-@media (max-width:768px){
-
-    .container{
-        width:100%;
-        padding:15px;
-    }
-
-    .buttons{
-        flex-direction:column;
-    }
-
-    #video{
-        width:110px;
-        height:150px;
-    }
-
-    button{
-        /* تكبير الفيديو */
-.video-fullscreen{
-    position:fixed !important;
-    inset:0;
-    width:100vw !important;
-    height:100vh !important;
-    border-radius:0 !important;
-    z-index:1000;
-    object-fit:contain;
-    background:#000;
-    cursor:zoom-out;
+#shareInviteBtn:hover {
+    background: #15803d;
 }
 
-.video-small{
-    position:absolute;
-    width:120px;
-    height:170px;
-    bottom:15px;
-    right:15px;
-    border-radius:12px;
-    border:2px solid #fff;
-    object-fit:cover;
-    z-index:1001;
-    cursor:pointer;
-}
-        width:100%;
+@media (max-width: 768px) {
+    .container {
+        width: 100%;
+        padding: 15px;
     }
 
+    .buttons {
+        flex-direction: column;
+    }
+
+    #video {
+        width: 110px;
+        height: 150px;
+    }
+
+    button {
+        width: 100%;
+    }
 }
