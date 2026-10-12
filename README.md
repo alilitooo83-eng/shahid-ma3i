@@ -1,79 +1,42 @@
-# Shahid Ma3i
+# شاهد معي | Shahid Ma3i
 
-A production-ready remote visual assistance application built with WebRTC and Socket.io.
+تطبيق مساعدة مرئية عن بُعد مبني على WebRTC وSocket.IO، مع دعم إعادة الاتصال، وتبادل ICE candidates، وإنهاء الجلسة بشكل منظم.
 
-## Features
+## المزايا
+- إنشاء جلسة مؤقتة برمز ورابط دعوة.
+- دعم session token لتأمين إشارات WebRTC.
+- perfect-negotiation style handling لتقليل تعارض العروض.
+- إعادة اتصال تلقائية ومحاولة استعادة الجلسة عند ضعف الشبكة أو انقطاعها.
+- دعم STUN افتراضيًا، وإمكانية تفعيل TURN عبر متغيرات البيئة.
+- إدارة جلسات وrooms مع تنظيف تلقائي.
 
-- Temporary room links
-- Camera and microphone streaming
-- Automatic Socket.io reconnection
-- ICE restart and peer recovery on failure
-- TURN support via environment variables
-- Security middleware for production
-
-## Local development
-
+## التشغيل المحلي
 ```bash
 npm install
 npm start
 ```
 
-Open:
-
-```text
+ثم افتح:
+```bash
 http://localhost:3000
 ```
 
-## Environment variables
-
-Copy `.env.example` to `.env` and adjust the values:
-
+## متغيرات البيئة
+انسخ `.env.example` وأضف القيم المناسبة:
 - `PORT`
 - `CORS_ORIGIN`
 - `TURN_URL`
 - `TURN_USERNAME`
 - `TURN_PASSWORD`
 
-### TURN behavior
+## ملاحظات الإنتاج
+- الخادم يرسل أحداث Socket.IO التالية: `create-room` و`join-room` و`offer` و`answer` و`ice-candidate` و`leave` و`reconnect` و`end-session`.
+- العميل والخادم يعتمدان نفس الحقول الأساسية: `roomId` و`sessionToken` و`offer` و`answer` و`candidate`.
+- عند إنهاء الجلسة أو خروج أحد الطرفين يتم تنظيف الـ peer connection والجلسة على الخادم.
 
-- If `TURN_URL`, `TURN_USERNAME`, and `TURN_PASSWORD` are set, the client uses STUN + TURN.
-- If they are missing, the client uses STUN only.
-
-## Railway deployment
-
-1. Push the repository to GitHub.
-2. Create a Railway service from the repo.
-3. Set the environment variables in Railway.
-4. Use `npm start` as the start command.
-5. Add the Railway domain to `CORS_ORIGIN`.
-
-## Project structure
-
-- `index.html` — application shell
-- `style.css` — responsive UI
-- `app.js` — client-side WebRTC and Socket.io logic
-- `server.js` — Express + Socket.io server
-- `.env.example` — environment sample
-- `docs/TURN_SETUP.md` — Coturn setup guide
-
-## Production notes
-
-The server includes:
-
-- `helmet`
-- `compression`
-- `cors`
-- `express-rate-limit`
-- `dotenv`
-
-The room system also includes cleanup for empty rooms and clearer lifecycle handling.
-
-## TURN setup
-
-See `docs/TURN_SETUP.md` for:
-
-- Coturn installation on Ubuntu 22.04
-- Required firewall ports
-- TLS configuration
-- TURN user creation
-- Server testing
+## بنية الملفات
+- `server.js`: الخادم وSocket.IO وإدارة الجلسات.
+- `app.js`: منطق العميل وWebRTC.
+- `index.html`: الواجهة.
+- `style.css`: التصميم.
+- `docs/`: ملفات توثيق إضافية.
