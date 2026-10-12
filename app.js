@@ -57,35 +57,42 @@ let endSessionRequested = false;
 let rtcConfig = null;
 let queuedCandidates = [];
 let seenCandidateKeys = new Set();
-let pendingRemoteDescription = null;
 let pendingSessionRecovery = null;
 let reconnectTimer = null;
 let offerTimer = null;
 let negotiatedOnce = false;
-let lastKnownRoomId = null;
-let lastKnownToken = null;
 let retryCounter = 0;
-let localStreamReady = false;
 let remoteDescriptionApplied = false;
-let allowNegotiation = false;
 
 function setStatus(message) {
   if (statusEl) statusEl.textContent = message;
 }
 
-function emitWithSession(event, payload = {}, callback) {
-  if (!roomId || !sessionToken) {
-    if (typeof callback === "function") callback({ success: false, message: "لا توجد جلسة نشطة" });
-    return false;
-  }
+function setSessionState(nextState, message) {
+  state = nextState;
+  if (message) setStatus(message);
+}
 
-  socket.emit(event, { ...payload, roomId, sessionToken }, callback);
-  return true;
+function safeAck(callback, payload) {
+  if (typeof callback === "function") callback(payload);
 }
 
 function stopTracks(stream) {
   if (!stream) return;
   for (const track of stream.getTracks()) track.stop();
+}
+
+function clearTimer(timerRef) {
+  if (timerRef) clearTimeout(timerRef);
+}
+
+function cancelTimers() {
+  clearTimer(reconnectTimer);
+  clearTimer(offerTimer);
+  clearTimer(pendingSessionRecovery);
+  reconnectTimer = null;
+  offerTimer = null;
+  pendingSessionRecovery = null;
 }
 
 function getRtcConfig() {
@@ -107,20 +114,41 @@ function getRtcConfig() {
   return rtcConfig;
 }
 
-function setSessionState(nextState, message) {
-  state = nextState;
-  if (message) setStatus(message);
+function emitWithSession(event, payload = {}, callback) {
+  if (!roomId || !sessionToken) {
+    safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
+    return false;
+  }
+
+  socket.emit(event, { ...payload, roomId, sessionToken }, callback);
+  return true;
 }
 
-function clearTimer(timerRef) {
-  if (timerRef) clearTimeout(timerRef);
+function getCandidateKey(candidate) {
+  if (!candidate) return "";
+  return [candidate.candidate || "", candidate.sdpMid || "", candidate.sdpMLineIndex ?? ""].join("|");
 }
 
-function cancelTimers() {
-  clearTimer(reconnectTimer);
-  clearTimer(offerTimer);
-  reconnectTimer = null;
-  offerTimer = null;
+function enqueueCandidate(candidate) {
+  const key = getCandidateKey(candidate);
+  if (!key || seenCandidateKeys.has(key)) return;
+  seenCandidateKeys.add(key);
+  queuedCandidates.push(candidate);
+}
+
+async function flushCandidateQueue() {
+  if (!peerConnection || !peerConnection.remoteDescription) return;
+
+  const start = Date.now();
+  while (queuedCandidates.length > 0) {
+    if (Date.now() - start > ICE_FLUSH_TIMEOUT_MS) break;
+    const candidate = queuedCandidates.shift();
+    try {
+      await peerConnection.addIceCandidate(candidate);
+    } catch (error) {
+      console.error("Failed to add queued ICE candidate", error);
+    }
+  }
 }
 
 function clearCandidateQueue() {
@@ -143,13 +171,10 @@ function cleanupPeerConnection() {
   }
 
   peerConnection = null;
-  pendingRemoteDescription = null;
-  remoteDescriptionApplied = false;
   negotiatedOnce = false;
   offerInFlight = false;
-  allowNegotiation = false;
+  remoteDescriptionApplied = false;
   clearCandidateQueue();
-
   if (remoteVideo) remoteVideo.srcObject = null;
 }
 
@@ -167,102 +192,22 @@ function resetSession(message = "تمت إعادة تعيين الجلسة") {
   endSessionRequested = false;
   isCreatingRoom = false;
   isJoiningRoom = false;
-  lastKnownRoomId = null;
-  lastKnownToken = null;
   retryCounter = 0;
   setSessionState(SESSION_STATE.IDLE, message);
   if (sessionArea) sessionArea.hidden = true;
   if (joinSection) joinSection.hidden = false;
 }
 
-function getCandidateKey(candidate) {
-  if (!candidate) return "";
-  const raw = candidate.candidate || candidate;
-  return [raw.candidate, raw.sdpMid, raw.sdpMLineIndex].join("|");
-}
+async function createLocalStream() {
+  if (localStream) return localStream;
 
-function enqueueCandidate(candidate) {
-  const key = getCandidateKey(candidate);
-  if (!key || seenCandidateKeys.has(key)) return;
-  seenCandidateKeys.add(key);
-  queuedCandidates.push(candidate);
-}
-
-async function flushCandidateQueue() {
-  if (!peerConnection || !peerConnection.remoteDescription) return;
-
-  const start = Date.now();
-  while (queuedCandidates.length > 0) {
-    if (Date.now() - start > ICE_FLUSH_TIMEOUT_MS) {
-      console.warn("ICE queue flush timed out");
-      break;
-    }
-
-    const candidate = queuedCandidates.shift();
-    try {
-      await peerConnection.addIceCandidate(candidate);
-    } catch (error) {
-      console.error("Failed to add queued ICE candidate", error);
-    }
-  }
-}
-
-function createPeerConnection() {
-  const pc = new RTCPeerConnection(getRtcConfig());
-
-  pc.ontrack = (event) => {
-    const stream = event.streams && event.streams[0];
-    if (stream && remoteVideo) remoteVideo.srcObject = stream;
-  };
-
-  pc.onicecandidate = (event) => {
-    if (!event.candidate || !roomId || !sessionToken) return;
-    emitWithSession("ice-candidate", { candidate: event.candidate });
-  };
-
-  pc.onconnectionstatechange = () => {
-    console.log("connectionState:", pc.connectionState);
-
-    if (pc.connectionState === "connected") {
-      setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بنجاح ✅");
-      retryCounter = 0;
-      return;
-    }
-
-    if (pc.connectionState === "connecting") {
-      setSessionState(SESSION_STATE.CONNECTING, "جارٍ الاتصال...");
-      return;
-    }
-
-    if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
-      scheduleRecovery(`connection:${pc.connectionState}`);
-    }
-  };
-
-  pc.oniceconnectionstatechange = () => {
-    console.log("iceConnectionState:", pc.iceConnectionState);
-
-    if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-      scheduleRecovery(`ice:${pc.iceConnectionState}`);
-    }
-  };
-
-  pc.onsignalingstatechange = () => {
-    console.log("signalingState:", pc.signalingState);
-
-    if (pc.signalingState === "closed" || pc.signalingState === "stable") return;
-    if (pc.signalingState === "have-local-offer" || pc.signalingState === "have-remote-offer") return;
-    if (pc.signalingState === "closed") scheduleRecovery("signaling:closed");
-  };
-
-  return pc;
-}
-
-async function ensurePeerConnection() {
-  if (peerConnection) return peerConnection;
-  peerConnection = createPeerConnection();
-  await addLocalTracks();
-  return peerConnection;
+  localStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: currentFacingMode },
+    audio: true
+  });
+  if (localVideo) localVideo.srcObject = localStream;
+  setSessionState(SESSION_STATE.LOCAL_READY, "تم تشغيل الكاميرا والميكروفون ✅");
+  return localStream;
 }
 
 async function addLocalTracks() {
@@ -279,38 +224,57 @@ async function addLocalTracks() {
   }
 }
 
-async function createLocalStream() {
-  if (localStream) return localStream;
+function createPeerConnection() {
+  const pc = new RTCPeerConnection(getRtcConfig());
 
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: currentFacingMode },
-      audio: true
-    });
-    localStreamReady = true;
-    if (localVideo) localVideo.srcObject = localStream;
-    setSessionState(SESSION_STATE.LOCAL_READY, "تم تشغيل الكاميرا والميكروفون ✅");
-    return localStream;
-  } catch (error) {
-    console.error("getUserMedia failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر تشغيل الكاميرا أو الميكروفون");
-    throw error;
-  }
-}
+  pc.ontrack = (event) => {
+    const stream = event.streams && event.streams[0];
+    if (stream && remoteVideo) remoteVideo.srcObject = stream;
+  };
 
-function clearOfferTimeout() {
-  clearTimer(offerTimer);
-  offerTimer = null;
-}
+  pc.onicecandidate = (event) => {
+    if (!event.candidate || !roomId || !sessionToken || endSessionRequested) return;
+    emitWithSession("ice-candidate", { candidate: event.candidate });
+  };
 
-function scheduleOfferTimeout() {
-  clearOfferTimeout();
-  offerTimer = setTimeout(() => {
-    if (isCreator && roomId && !negotiatedOnce) {
-      console.warn("Offer timeout reached");
-      scheduleRecovery("offer-timeout");
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") {
+      setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بنجاح ✅");
+      retryCounter = 0;
+      return;
     }
-  }, SIGNAL_TIMEOUT_MS);
+
+    if (pc.connectionState === "connecting") {
+      setSessionState(SESSION_STATE.CONNECTING, "جارٍ الاتصال...");
+      return;
+    }
+
+    if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+      scheduleRecovery(`connection:${pc.connectionState}`);
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (["failed", "disconnected"].includes(pc.iceConnectionState)) {
+      scheduleRecovery(`ice:${pc.iceConnectionState}`);
+    }
+  };
+
+  pc.onsignalingstatechange = () => {
+    if (pc.signalingState === "closed") {
+      scheduleRecovery("signaling:closed");
+    }
+  };
+
+  return pc;
+}
+
+async function ensurePeerConnection() {
+  if (!peerConnection) {
+    peerConnection = createPeerConnection();
+    await addLocalTracks();
+  }
+  return peerConnection;
 }
 
 async function createOffer(forceIceRestart = false) {
@@ -318,7 +282,10 @@ async function createOffer(forceIceRestart = false) {
   if (peerConnection.signalingState === "have-local-offer") return;
 
   offerInFlight = true;
-  scheduleOfferTimeout();
+  clearTimer(offerTimer);
+  offerTimer = setTimeout(() => {
+    if (isCreator && roomId && !negotiatedOnce) scheduleRecovery("offer-timeout");
+  }, SIGNAL_TIMEOUT_MS);
 
   try {
     await addLocalTracks();
@@ -329,21 +296,17 @@ async function createOffer(forceIceRestart = false) {
     setSessionState(SESSION_STATE.CONNECTING, "تم إرسال عرض الاتصال...");
   } catch (error) {
     console.error("createOffer failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر إنشاء عرض الاتصال");
     scheduleRecovery("createOffer-failed");
   } finally {
     offerInFlight = false;
   }
 }
 
-async function handleIncomingOffer(offerPayload) {
-  if (!offerPayload || !offerPayload.offer) return;
-  if (endSessionRequested) return;
-
+async function handleIncomingOffer(payload) {
+  if (!payload || !payload.offer || endSessionRequested) return;
+  await ensurePeerConnection();
   try {
-    await ensurePeerConnection();
-    pendingRemoteDescription = offerPayload.offer;
-    await peerConnection.setRemoteDescription(offerPayload.offer);
+    await peerConnection.setRemoteDescription(payload.offer);
     remoteDescriptionApplied = true;
     await addLocalTracks();
     const answer = await peerConnection.createAnswer();
@@ -357,12 +320,11 @@ async function handleIncomingOffer(offerPayload) {
   }
 }
 
-async function handleIncomingAnswer(answerPayload) {
-  if (!answerPayload || !answerPayload.answer || !peerConnection || endSessionRequested) return;
-
+async function handleIncomingAnswer(payload) {
+  if (!payload || !payload.answer || !peerConnection || endSessionRequested) return;
   try {
-    if (peerConnection.signalingState === "stable" || remoteDescriptionApplied) {
-      await peerConnection.setRemoteDescription(answerPayload.answer);
+    if (peerConnection.signalingState !== "closed" && !remoteDescriptionApplied) {
+      await peerConnection.setRemoteDescription(payload.answer);
       remoteDescriptionApplied = true;
       await flushCandidateQueue();
       setSessionState(SESSION_STATE.CONNECTED, "تم الاتصال بالطرف الآخر ✅");
@@ -373,24 +335,21 @@ async function handleIncomingAnswer(answerPayload) {
   }
 }
 
-async function handleIncomingCandidate(candidatePayload) {
-  if (!candidatePayload || !candidatePayload.candidate || endSessionRequested) return;
-
+async function handleIncomingCandidate(payload) {
+  if (!payload || !payload.candidate || endSessionRequested) return;
   try {
     if (!peerConnection || !peerConnection.remoteDescription) {
-      enqueueCandidate(candidatePayload.candidate);
+      enqueueCandidate(payload.candidate);
       return;
     }
-    await peerConnection.addIceCandidate(candidatePayload.candidate);
+    await peerConnection.addIceCandidate(payload.candidate);
   } catch (error) {
     console.error("Failed to handle ICE candidate", error);
   }
 }
 
 function scheduleRecovery(reason) {
-  if (endSessionRequested) return;
-  if (pendingSessionRecovery) return;
-
+  if (endSessionRequested || pendingSessionRecovery) return;
   setSessionState(SESSION_STATE.RECOVERING, `جارٍ استعادة الاتصال (${reason})...`);
   pendingSessionRecovery = setTimeout(async () => {
     pendingSessionRecovery = null;
@@ -398,7 +357,7 @@ function scheduleRecovery(reason) {
   }, RECOVERY_DELAY_MS);
 }
 
-async function recoverConnection(reason) {
+async function recoverConnection() {
   if (endSessionRequested || !roomId) return;
   if (retryCounter >= MAX_RETRY_COUNT) {
     setSessionState(SESSION_STATE.ERROR, "فشلت إعادة المحاولة عدة مرات");
@@ -419,73 +378,46 @@ async function recoverConnection(reason) {
   if (localStream && localVideo) localVideo.srcObject = localStream;
 
   await ensurePeerConnection();
-
   if (isCreator) {
     await createOffer(true);
-  } else if (pendingRemoteDescription) {
-    try {
-      await peerConnection.setRemoteDescription(pendingRemoteDescription);
-      await addLocalTracks();
-      const answer = await peerConnection.createAnswer();
-      await peerConnection.setLocalDescription(answer);
-      emitWithSession("answer", { answer });
-    } catch (error) {
-      console.error("recoverConnection failed to restore answer", error);
-    }
+  } else {
+    await addLocalTracks();
   }
-
   await flushCandidateQueue();
   setSessionState(SESSION_STATE.CONNECTING, "تمت إعادة إنشاء الاتصال...");
 }
 
-function markEndSessionRequested() {
-  if (endSessionRequested) return true;
-  endSessionRequested = true;
-  return false;
-}
-
 function endSession(message = "تم إنهاء الجلسة") {
-  if (markEndSessionRequested()) return;
+  if (endSessionRequested) return;
+  endSessionRequested = true;
   emitWithSession("end-session", {}, () => {});
   resetSession(message);
 }
 
 async function switchCamera() {
   if (!localStream) return;
-
   currentFacingMode = currentFacingMode === "user" ? "environment" : "user";
   stopTracks(localStream);
   localStream = null;
-  localStreamReady = false;
-
-  try {
-    await createLocalStream();
-    if (peerConnection) {
-      for (const sender of peerConnection.getSenders()) {
-        if (sender.track && sender.track.kind === "video" && localStream) {
-          const newTrack = localStream.getVideoTracks()[0];
-          if (newTrack) sender.replaceTrack(newTrack);
-        }
+  await createLocalStream();
+  if (peerConnection) {
+    const videoTrack = localStream.getVideoTracks()[0];
+    for (const sender of peerConnection.getSenders()) {
+      if (sender.track && sender.track.kind === "video" && videoTrack) {
+        await sender.replaceTrack(videoTrack);
       }
     }
-    setStatus(`تم تبديل الكاميرا إلى ${currentFacingMode === "user" ? "الأمامية" : "الخلفية"}`);
-  } catch (error) {
-    console.error("switchCamera failed", error);
   }
-}
-
-function applyInviteIfNeeded() {
-  if (!inviteRoomId || !joinInput) return;
-  joinInput.value = inviteRoomId.toUpperCase();
 }
 
 async function createRoom() {
   if (isCreatingRoom) return;
   isCreatingRoom = true;
+  setSessionState(SESSION_STATE.CREATING_ROOM, "جارٍ إنشاء الجلسة...");
 
   try {
     await createLocalStream();
-    socket.emit("create-room", async (result) => {
+    socket.emit("create-room", (result) => {
       isCreatingRoom = false;
       if (!result || !result.success) {
         setSessionState(SESSION_STATE.ERROR, (result && result.message) || "تعذّر إنشاء الجلسة");
@@ -494,203 +426,114 @@ async function createRoom() {
 
       roomId = result.roomId;
       sessionToken = result.sessionToken;
-      lastKnownRoomId = roomId;
-      lastKnownToken = sessionToken;
       isCreator = true;
-      hasRemotePeer = false;
-      sessionCodeEl.textContent = roomId;
-      sessionArea.hidden = false;
-      joinSection.hidden = true;
-      setSessionState(SESSION_STATE.CREATING_ROOM, "تم إنشاء الجلسة ✅");
-
-      const inviteLink = new URL(window.location.href);
-      inviteLink.searchParams.set("room", roomId);
-
-      if (inviteArea) {
-        inviteArea.innerHTML = `
-          <p>رابط الدعوة:</p>
-          <input id="inviteLink" readonly value="${inviteLink.toString()}">
-          <button id="copyInviteBtn" type="button">نسخ رابط الدعوة</button>
-          <button id="shareInviteBtn" type="button">مشاركة عبر واتساب</button>
-        `;
-
-        const copyInviteBtn = document.getElementById("copyInviteBtn");
-        const shareInviteBtn = document.getElementById("shareInviteBtn");
-        if (copyInviteBtn) {
-          copyInviteBtn.onclick = async () => {
-            try {
-              await navigator.clipboard.writeText(inviteLink.toString());
-              setStatus("تم نسخ رابط الدعوة ✅");
-            } catch (error) {
-              console.error("Clipboard copy failed", error);
-              setStatus("انسخ الرابط يدويًا");
-            }
-          };
-        }
-        if (shareInviteBtn) {
-          shareInviteBtn.onclick = () => {
-            const message = encodeURIComponent(`انضم إليّ في جلسة شاهد معي:\n${inviteLink.toString()}`);
-            window.open(`https://wa.me/?text=${message}`, "_blank");
-          };
-        }
-      }
-
-      await ensurePeerConnection();
-      await createOffer(false);
+      if (sessionCodeEl) sessionCodeEl.textContent = roomId;
+      if (inviteArea) inviteArea.hidden = false;
+      if (sessionArea) sessionArea.hidden = false;
+      if (joinSection) joinSection.hidden = true;
+      ensurePeerConnection().then(() => createOffer(false));
+      setSessionState(SESSION_STATE.CONNECTING, "تم إنشاء الجلسة بنجاح، بانتظار الطرف الآخر...");
     });
   } catch (error) {
     isCreatingRoom = false;
     console.error("createRoom failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر إنشاء الجلسة");
+    setSessionState(SESSION_STATE.ERROR, "تعذّر تشغيل الكاميرا قبل إنشاء الجلسة");
   }
 }
 
 async function joinRoom() {
   if (isJoiningRoom) return;
+  const targetRoomId = (joinInput && joinInput.value ? joinInput.value : inviteRoomId || "").trim().toUpperCase();
+  if (!targetRoomId) {
+    setStatus("أدخل كود الجلسة أولاً");
+    return;
+  }
+
   isJoiningRoom = true;
+  setSessionState(SESSION_STATE.JOINING_ROOM, "جارٍ الانضمام للجلسة...");
 
   try {
     await createLocalStream();
-    const requestedRoomId = (joinInput && joinInput.value ? joinInput.value : "").trim().toUpperCase();
-    if (!requestedRoomId) {
-      setSessionState(SESSION_STATE.ERROR, "أدخل رمز الجلسة أولًا");
-      isJoiningRoom = false;
-      return;
-    }
-
-    socket.emit("join-room", { roomId: requestedRoomId, sessionToken: requestedRoomId }, async (result) => {
+    socket.emit("join-room", { roomId: targetRoomId, sessionToken: targetRoomId }, (result) => {
       isJoiningRoom = false;
       if (!result || !result.success) {
-        setSessionState(SESSION_STATE.ERROR, (result && result.message) || "تعذّر الانضمام");
+        setSessionState(SESSION_STATE.ERROR, (result && result.message) || "تعذّر الانضمام للجلسة");
         return;
       }
 
       roomId = result.roomId;
       sessionToken = result.sessionToken;
-      lastKnownRoomId = roomId;
-      lastKnownToken = sessionToken;
       isCreator = false;
-      hasRemotePeer = true;
-      sessionArea.hidden = false;
-      sessionCodeEl.textContent = roomId;
-      setSessionState(SESSION_STATE.JOINING_ROOM, "تم الانضمام بنجاح ✅");
-
-      await ensurePeerConnection();
-      await flushCandidateQueue();
+      if (sessionCodeEl) sessionCodeEl.textContent = roomId;
+      if (sessionArea) sessionArea.hidden = false;
+      if (joinSection) joinSection.hidden = true;
+      setSessionState(SESSION_STATE.CONNECTING, "تم الانضمام، بانتظار اتصال الطرف الآخر...");
+      ensurePeerConnection();
     });
   } catch (error) {
     isJoiningRoom = false;
     console.error("joinRoom failed", error);
-    setSessionState(SESSION_STATE.ERROR, "تعذّر الانضمام للجلسة");
+    setSessionState(SESSION_STATE.ERROR, "تعذّر تشغيل الكاميرا قبل الانضمام للجلسة");
   }
 }
 
-function bindUi() {
-  if (cameraBtn) cameraBtn.onclick = createLocalStream;
-  if (switchCameraBtn) switchCameraBtn.onclick = switchCamera;
-  if (createRoomBtn) createRoomBtn.onclick = createRoom;
-  if (joinBtn) joinBtn.onclick = joinRoom;
-
-  if (remoteVideo) {
-    remoteVideo.onclick = () => {
-      isFullscreen = !isFullscreen;
-      document.body.classList.toggle("fullscreen-mode", isFullscreen);
-    };
-  }
+function leaveSession() {
+  socket.emit("leave", {}, () => {});
+  resetSession("تمت مغادرة الجلسة");
 }
 
-function bindSocketEvents() {
-  socket.on("connect", async () => {
-    setStatus("متصل بالخادم ✅");
-    if (lastKnownRoomId && lastKnownToken && !roomId) {
-      roomId = lastKnownRoomId;
-      sessionToken = lastKnownToken;
-    }
-    if (isCreator && roomId) {
-      await createOffer(true);
-    }
-  });
-
-  socket.on("disconnect", (reason) => {
-    console.warn("Socket disconnected:", reason);
-    setStatus("انقطع اتصال الخادم، جارٍ إعادة المحاولة...");
-  });
-
-  socket.on("connect_error", (error) => {
-    console.error("Socket connect error", error);
-    setStatus("خطأ في الاتصال بالخادم");
-  });
-
-  socket.io.on("reconnect_attempt", () => {
-    setStatus("جارٍ إعادة الاتصال بالخادم...");
-  });
-
-  socket.io.on("reconnect", async () => {
-    setStatus("تمت إعادة الاتصال بالخادم ✅");
-    if (roomId && sessionToken && peerConnection && isCreator) {
-      await createOffer(true);
-    }
-  });
-
-  socket.io.on("reconnect_failed", () => {
-    setStatus("فشلت إعادة الاتصال بالخادم");
-  });
-
-  socket.on("user-joined", async () => {
-    hasRemotePeer = true;
-    if (isCreator) {
-      await createOffer(false);
-    }
-  });
-
-  socket.on("offer", async (payload) => {
-    await handleIncomingOffer(payload);
-  });
-
-  socket.on("answer", async (payload) => {
-    await handleIncomingAnswer(payload);
-  });
-
-  socket.on("ice-candidate", async (payload) => {
-    await handleIncomingCandidate(payload);
-  });
-
-  socket.on("room-ended", () => {
-    resetSession("تم إنهاء الجلسة من الطرف الآخر");
-  });
-
-  socket.on("peer-left", () => {
-    if (!endSessionRequested) {
-      resetSession("غادر الطرف الآخر الجلسة");
-    }
-  });
-}
-
-async function initialize() {
-  bindUi();
-  bindSocketEvents();
-  applyInviteIfNeeded();
-  setStatus("جاهز للبدء");
-
-  if (inviteRoomId && joinInput) {
-    joinInput.value = inviteRoomId.toUpperCase();
+socket.on("offer", async (payload) => {
+  if (payload && payload.roomId && payload.roomId !== roomId) return;
+  await handleIncomingOffer(payload);
+});
+socket.on("answer", async (payload) => {
+  if (payload && payload.roomId && payload.roomId !== roomId) return;
+  await handleIncomingAnswer(payload);
+});
+socket.on("ice-candidate", async (payload) => {
+  if (payload && payload.roomId && payload.roomId !== roomId) return;
+  await handleIncomingCandidate(payload);
+});
+socket.on("user-joined", async (payload) => {
+  if (payload && payload.roomId && payload.roomId !== roomId) return;
+  hasRemotePeer = true;
+  if (isCreator) await createOffer(false);
+});
+socket.on("peer-left", () => {
+  hasRemotePeer = false;
+  scheduleRecovery("peer-left");
+});
+socket.on("room-ended", () => {
+  endSessionRequested = true;
+  resetSession("انتهت الجلسة من الطرف الآخر");
+  setSessionState(SESSION_STATE.ENDED, "انتهت الجلسة");
+});
+socket.on("disconnect", () => {
+  scheduleRecovery("socket-disconnect");
+});
+socket.on("reconnect", () => {
+  if (roomId && sessionToken && !endSessionRequested) {
+    socket.emit("reconnect", { roomId, sessionToken }, (result) => {
+      if (result && result.success && isCreator) createOffer(true);
+    });
   }
+});
+
+if (cameraBtn) cameraBtn.addEventListener("click", createRoom);
+if (createRoomBtn) createRoomBtn.addEventListener("click", createRoom);
+if (joinBtn) joinBtn.addEventListener("click", joinRoom);
+if (switchCameraBtn) switchCameraBtn.addEventListener("click", switchCamera);
+if (localVideo) {
+  localVideo.addEventListener("click", () => {
+    isFullscreen = !isFullscreen;
+    document.body.classList.toggle("fullscreen-mode", isFullscreen);
+  });
 }
 
 window.addEventListener("beforeunload", () => {
-  cleanup();
   stopTracks(localStream);
+  cleanup();
 });
 
-window.endSession = endSession;
-window.createRoom = createRoom;
-window.joinRoom = joinRoom;
-window.recoverConnection = recoverConnection;
-window.resetSession = resetSession;
-window.emitWithSession = emitWithSession;
-window.setStatus = setStatus;
-
-initialize().catch((error) => {
-  console.error("Initialization failed", error);
-  setStatus("فشل تهيئة التطبيق");
-});
+setStatus("جاهز للاتصال");
+if (inviteRoomId && joinInput && !joinInput.value) joinInput.value = inviteRoomId.toUpperCase();
