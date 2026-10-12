@@ -27,12 +27,19 @@
       <button id="endRoomBtn" type="button">⛔ إنهاء الجلسة</button>
     </section>
 
-    <section id="sessionArea" hidden>
-      <h3>Room ID</h3>
-      <div id="sessionCode">--------</div>
-      <div id="inviteArea" hidden>
-        <a id="inviteLink" href="#" target="_blank" rel="noopener noreferrer"></a>
-        <button id="copyInviteBtn" type="button">نسخ رابط الدعوة</button>
+    <section id="sessionArea" class="session-card" hidden>
+      <div class="session-row">
+        <h3>Room ID</h3>
+        <div id="sessionCode" class="session-code">--------</div>
+      </div>
+
+      <div id="inviteArea" class="invite-card" hidden>
+        <div class="invite-label">🔗 رابط الدعوة</div>
+        <a id="inviteLink" class="invite-link" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div class="invite-actions">
+          <button id="copyInviteBtn" class="success" type="button">نسخ الرابط</button>
+          <button id="shareInviteBtn" class="secondary" type="button">📤 مشاركة الدعوة</button>
+        </div>
       </div>
     </section>
 
