@@ -27,6 +27,8 @@ const TURN_URL = (window.__TURN_URL__ || "").trim();
 const TURN_USERNAME = (window.__TURN_USERNAME__ || "").trim();
 const TURN_PASSWORD = (window.__TURN_PASSWORD__ || "").trim();
 const invitedRoomId = new URLSearchParams(window.location.search).get("room");
+let serverIceServers = null;
+let iceConfigPromise = null;
 
 let localStream = null;
 let peerConnection = null;
@@ -77,22 +79,40 @@ function setInitialUi() {
   resetButtons();
 }
 
+async function loadIceConfig() {
+  if (serverIceServers) return serverIceServers;
+  if (iceConfigPromise) return iceConfigPromise;
+
+  iceConfigPromise = fetch("/ice-config", { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error("ICE config request failed");
+      const config = await response.json();
+      if (!Array.isArray(config.iceServers) || !config.iceServers.length) {
+        throw new Error("ICE config is empty");
+      }
+      serverIceServers = config.iceServers;
+      log("ICE_CONFIG_LOADED", { turnConfigured: Boolean(config.turnConfigured) });
+      return serverIceServers;
+    })
+    .catch((error) => {
+      console.error("[WebRTC] ICE config load failed; using STUN fallback", error);
+      serverIceServers = [
+        { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
+      ];
+      return serverIceServers;
+    });
+
+  return iceConfigPromise;
+}
+
 function getRtcConfig() {
-  const iceServers = [
-    {
-      urls: [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302"
-      ]
-    }
+  const iceServers = serverIceServers || [
+    { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
   ];
 
-  if (TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
-    iceServers.push({
-      urls: TURN_URL,
-      username: TURN_USERNAME,
-      credential: TURN_PASSWORD
-    });
+  // Support existing inline configuration as a fallback for older deployments.
+  if (!serverIceServers && TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
+    iceServers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_PASSWORD });
   }
 
   return { iceServers, iceCandidatePoolSize: 0 };
@@ -466,6 +486,7 @@ async function createRoom() {
   roomRole = "creator";
 
   try {
+    await loadIceConfig();
     await ensureLocalStream();
 
     socket.emit("create-room", async (result) => {
@@ -502,6 +523,7 @@ async function joinRoom(targetRoomId) {
   roomRole = "guest";
 
   try {
+    await loadIceConfig();
     await ensureLocalStream();
 
     socket.emit("join-room", { roomId: targetRoomId }, async (result) => {
