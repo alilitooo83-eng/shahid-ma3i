@@ -83,13 +83,8 @@ function clearRoomTimer(roomId) {
 function destroyRoom(roomId, reason = "room-ended") {
   const room = rooms.get(roomId);
   if (!room) return;
-
   clearRoomTimer(roomId);
-
-  for (const memberId of room.members) {
-    socketRoomMap.delete(memberId);
-  }
-
+  for (const memberId of room.members) socketRoomMap.delete(memberId);
   io.to(roomId).emit(reason, { roomId });
   rooms.delete(roomId);
   console.log(`[room] destroyed ${roomId} (${reason})`);
@@ -118,11 +113,9 @@ function validateSession(socket, payload) {
   const room = getRoomForSocket(socket.id);
   if (!room) return { ok: false, message: "SESSION_NOT_FOUND" };
   if (!isRoomMember(room, socket.id)) return { ok: false, message: "NOT_ROOM_MEMBER" };
-
   const token = payload && typeof payload.sessionToken === "string" ? payload.sessionToken : "";
   const expected = room.tokens.get(socket.id);
   if (!token || token !== expected) return { ok: false, message: "INVALID_SESSION_TOKEN" };
-
   return { ok: true, room };
 }
 
@@ -141,7 +134,6 @@ function getRoomIdForSignal(room) {
 function detachSocket(socketId) {
   const roomId = socketRoomMap.get(socketId);
   if (!roomId) return;
-
   const room = rooms.get(roomId);
   socketRoomMap.delete(socketId);
   if (!room) return;
@@ -155,6 +147,7 @@ function detachSocket(socketId) {
   }
 
   if (room.creator === socketId) {
+    room.ended = true;
     destroyRoom(roomId, "room-ended");
     return;
   }
@@ -193,25 +186,12 @@ io.on("connection", (socket) => {
   socket.on("join-room", (data, callback) => {
     try {
       const roomId = normalizeRoomId(data && data.roomId);
-      if (!roomId) {
-        safeAck(callback, { success: false, message: "رمز الجلسة غير صالح" });
-        return;
-      }
-
+      if (!roomId) return safeAck(callback, { success: false, message: "رمز الجلسة غير صالح" });
       const room = rooms.get(roomId);
-      if (!room) {
-        safeAck(callback, { success: false, message: "الجلسة غير موجودة" });
-        return;
-      }
-
-      if (room.ended) {
-        safeAck(callback, { success: false, message: "انتهت الجلسة" });
-        return;
-      }
-
+      if (!room) return safeAck(callback, { success: false, message: "الجلسة غير موجودة" });
+      if (room.ended) return safeAck(callback, { success: false, message: "انتهت الجلسة" });
       if (room.members.size >= MAX_ROOM_MEMBERS && !room.members.has(socket.id)) {
-        safeAck(callback, { success: false, message: "الجلسة مكتملة" });
-        return;
+        return safeAck(callback, { success: false, message: "الجلسة مكتملة" });
       }
 
       room.members.add(socket.id);
@@ -279,11 +259,7 @@ io.on("connection", (socket) => {
 
   socket.on("leave", (_data, callback) => {
     const room = getRoomForSocket(socket.id);
-    if (!room) {
-      safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
-      return;
-    }
-
+    if (!room) return safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
     detachSocket(socket.id);
     safeAck(callback, { success: true });
   });
@@ -291,26 +267,24 @@ io.on("connection", (socket) => {
   socket.on("reconnect", (_data, callback) => {
     const room = getRoomForSocket(socket.id);
     if (!room || !isRoomMember(room, socket.id)) {
-      safeAck(callback, { success: false, message: "لا توجد جلسة لإعادة الاتصال" });
-      return;
+      return safeAck(callback, { success: false, message: "لا توجد جلسة لإعادة الاتصال" });
     }
     safeAck(callback, { success: true, roomId: socketRoomMap.get(socket.id) });
   });
 
   socket.on("end-session", (_data, callback) => {
-    const room = getRoomForSocket(socket.id);
+    const roomId = socketRoomMap.get(socket.id);
+    const room = roomId ? rooms.get(roomId) : null;
     if (!room || room.ended) {
-      safeAck(callback, { success: false, message: "الجلسة منتهية بالفعل" });
-      return;
+      return safeAck(callback, { success: false, message: "الجلسة منتهية بالفعل" });
     }
-
     if (room.creator !== socket.id) {
-      safeAck(callback, { success: false, message: "فقط منشئ الجلسة يستطيع إنهاؤها" });
-      return;
+      return safeAck(callback, { success: false, message: "فقط منشئ الجلسة يستطيع إنهاؤها" });
     }
 
     room.ended = true;
-    destroyRoom(socketRoomMap.get(socket.id), "room-ended");
+    io.to(roomId).emit("room-ended", { roomId });
+    destroyRoom(roomId, "room-ended");
     safeAck(callback, { success: true });
   });
 
