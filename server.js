@@ -80,16 +80,6 @@ function clearRoomTimer(roomId) {
   roomTimers.delete(roomId);
 }
 
-function destroyRoom(roomId, reason = "room-ended") {
-  const room = rooms.get(roomId);
-  if (!room) return;
-  clearRoomTimer(roomId);
-  for (const memberId of room.members) socketRoomMap.delete(memberId);
-  io.to(roomId).emit(reason, { roomId });
-  rooms.delete(roomId);
-  console.log(`[room] destroyed ${roomId} (${reason})`);
-}
-
 function scheduleRoomCleanup(roomId) {
   clearRoomTimer(roomId);
   const timer = setTimeout(() => {
@@ -103,32 +93,22 @@ function scheduleRoomCleanup(roomId) {
   roomTimers.set(roomId, timer);
 }
 
-function issueRoomSignal(room, socket) {
-  const token = buildSessionToken();
-  room.tokens.set(socket.id, token);
-  return token;
-}
-
-function validateSession(socket, payload) {
-  const room = getRoomForSocket(socket.id);
-  if (!room) return { ok: false, message: "SESSION_NOT_FOUND" };
-  if (!isRoomMember(room, socket.id)) return { ok: false, message: "NOT_ROOM_MEMBER" };
-  const token = payload && typeof payload.sessionToken === "string" ? payload.sessionToken : "";
-  const expected = room.tokens.get(socket.id);
-  if (!token || token !== expected) return { ok: false, message: "INVALID_SESSION_TOKEN" };
-  return { ok: true, room };
-}
-
 function safeAck(callback, payload) {
   if (typeof callback === "function") callback(payload);
 }
 
-function validateSignalPayload(payload, field) {
-  return Boolean(payload && typeof payload.roomId === "string" && payload[field]);
+function validateSession(socket, payload) {
+  const room = getRoomForSocket(socket.id);
+  if (!room) return { ok: false, room: null };
+  if (!isRoomMember(room, socket.id)) return { ok: false, room: null };
+  const token = payload && typeof payload.sessionToken === "string" ? payload.sessionToken : "";
+  const expected = room.tokens.get(socket.id);
+  if (!token || token !== expected) return { ok: false, room: null };
+  return { ok: true, room };
 }
 
-function getRoomIdForSignal(room) {
-  return room ? room.id : null;
+function validateSignalPayload(payload, field) {
+  return Boolean(payload && typeof payload.roomId === "string" && payload[field]);
 }
 
 function detachSocket(socketId) {
@@ -148,7 +128,9 @@ function detachSocket(socketId) {
 
   if (room.creator === socketId) {
     room.ended = true;
-    destroyRoom(roomId, "room-ended");
+    io.to(roomId).emit("room-ended", { roomId });
+    rooms.delete(roomId);
+    clearRoomTimer(roomId);
     return;
   }
 
@@ -195,7 +177,8 @@ io.on("connection", (socket) => {
       }
 
       room.members.add(socket.id);
-      const memberToken = issueRoomSignal(room, socket);
+      const memberToken = buildSessionToken();
+      room.tokens.set(socket.id, memberToken);
       socketRoomMap.set(socket.id, roomId);
       socket.join(roomId);
       scheduleRoomCleanup(roomId);
@@ -219,7 +202,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "offer")) return;
-      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("offer", {
+      io.to(validation.room.id).except(socket.id).emit("offer", {
         offer: data.offer,
         roomId: data.roomId,
         senderId: socket.id
@@ -233,7 +216,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "answer")) return;
-      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("answer", {
+      io.to(validation.room.id).except(socket.id).emit("answer", {
         answer: data.answer,
         roomId: data.roomId,
         senderId: socket.id
@@ -247,7 +230,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "candidate")) return;
-      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("ice-candidate", {
+      io.to(validation.room.id).except(socket.id).emit("ice-candidate", {
         candidate: data.candidate,
         roomId: data.roomId,
         senderId: socket.id
@@ -257,24 +240,8 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("leave", (_data, callback) => {
+  socket.on("end-session", async (_data, callback) => {
     const room = getRoomForSocket(socket.id);
-    if (!room) return safeAck(callback, { success: false, message: "لا توجد جلسة نشطة" });
-    detachSocket(socket.id);
-    safeAck(callback, { success: true });
-  });
-
-  socket.on("reconnect", (_data, callback) => {
-    const room = getRoomForSocket(socket.id);
-    if (!room || !isRoomMember(room, socket.id)) {
-      return safeAck(callback, { success: false, message: "لا توجد جلسة لإعادة الاتصال" });
-    }
-    safeAck(callback, { success: true, roomId: socketRoomMap.get(socket.id) });
-  });
-
-  socket.on("end-session", (_data, callback) => {
-    const roomId = socketRoomMap.get(socket.id);
-    const room = roomId ? rooms.get(roomId) : null;
     if (!room || room.ended) {
       return safeAck(callback, { success: false, message: "الجلسة منتهية بالفعل" });
     }
@@ -283,8 +250,12 @@ io.on("connection", (socket) => {
     }
 
     room.ended = true;
-    io.to(roomId).emit("room-ended", { roomId });
-    destroyRoom(roomId, "room-ended");
+    const roomId = room.id;
+    socket.to(roomId).emit("room-ended", { roomId });
+    await new Promise((resolve) => setImmediate(resolve));
+    rooms.delete(roomId);
+    clearRoomTimer(roomId);
+    for (const memberId of room.members) socketRoomMap.delete(memberId);
     safeAck(callback, { success: true });
   });
 
