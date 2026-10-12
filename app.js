@@ -521,41 +521,33 @@ function leaveSession() {
   resetSession("تمت مغادرة الجلسة");
 }
 
-socket.on("offer", async (payload) => {
-  if (payload && payload.roomId && payload.roomId !== roomId) return;
-  await handleIncomingOffer(payload);
+socket.on("offer", handleIncomingOffer);
+socket.on("answer", handleIncomingAnswer);
+socket.on("ice-candidate", handleIncomingCandidate);
+socket.on("user-joined", (payload) => {
+  if (payload && payload.roomId === roomId) {
+    hasRemotePeer = true;
+    if (isCreator) createOffer(false);
+  }
 });
-socket.on("answer", async (payload) => {
-  if (payload && payload.roomId && payload.roomId !== roomId) return;
-  await handleIncomingAnswer(payload);
+socket.on("peer-left", (payload) => {
+  if (payload && payload.roomId === roomId) {
+    hasRemotePeer = false;
+    setSessionState(SESSION_STATE.CONNECTING, "غادر الطرف الآخر الجلسة");
+  }
 });
-socket.on("ice-candidate", async (payload) => {
-  if (payload && payload.roomId && payload.roomId !== roomId) return;
-  await handleIncomingCandidate(payload);
-});
-socket.on("user-joined", async (payload) => {
-  if (payload && payload.roomId && payload.roomId !== roomId) return;
-  hasRemotePeer = true;
-  if (isCreator) await createOffer(false);
-});
-socket.on("peer-left", () => {
-  hasRemotePeer = false;
-  scheduleRecovery("peer-left");
-});
-socket.on("room-ended", () => {
+socket.on("room-ended", (payload) => {
+  if (!payload || payload.roomId !== roomId) return;
   endSessionRequested = true;
-  resetSession("انتهت الجلسة من الطرف الآخر");
-  setSessionState(SESSION_STATE.ENDED, "انتهت الجلسة");
+  resetSession("انتهت الجلسة");
+});
+socket.on("connect", () => {
+  if (roomId && sessionToken && state === SESSION_STATE.RECOVERING) {
+    setStatus("تمت استعادة الاتصال بالخادم");
+  }
 });
 socket.on("disconnect", () => {
-  scheduleRecovery("socket-disconnect");
-});
-socket.on("reconnect", () => {
-  if (roomId && sessionToken && !endSessionRequested) {
-    socket.emit("reconnect", { roomId, sessionToken }, (result) => {
-      if (result && result.success && isCreator) createOffer(true);
-    });
-  }
+  if (!endSessionRequested) scheduleRecovery("socket-disconnect");
 });
 
 if (cameraBtn) cameraBtn.addEventListener("click", createLocalStream);
@@ -563,11 +555,12 @@ if (switchCameraBtn) switchCameraBtn.addEventListener("click", switchCamera);
 if (createRoomBtn) createRoomBtn.addEventListener("click", createRoom);
 if (joinBtn) joinBtn.addEventListener("click", joinRoom);
 if (endRoomBtn) endRoomBtn.addEventListener("click", endSession);
-if (copyInviteBtn) copyInviteBtn.addEventListener("click", async () => {
-  if (!roomId) return;
-  await copyInviteLinkToClipboard(createInviteLink(roomId));
-});
 
-if (inviteRoomId && joinInput && !joinInput.value) {
+if (inviteRoomId && joinInput) {
   joinInput.value = inviteRoomId.toUpperCase();
+  setStatus("تم فتح رابط الدعوة، اضغط انضمام");
 }
+
+window.addEventListener("beforeunload", () => {
+  if (!endSessionRequested) socket.emit("leave", {}, () => {});
+});
