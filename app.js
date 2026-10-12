@@ -20,6 +20,7 @@ let currentFacingMode = "user";
 let isFullscreen = false;
 let isCreator = false;
 let sessionStarted = false;
+let shouldCreateOffer = false;
 
 const inviteRoomId = new URLSearchParams(window.location.search).get("room");
 
@@ -36,6 +37,31 @@ function setStatus(message) {
     if (status) {
         status.innerText = message;
     }
+}
+
+function cleanupPeerConnection() {
+    if (peerConnection) {
+        peerConnection.ontrack = null;
+        peerConnection.onicecandidate = null;
+        peerConnection.onconnectionstatechange = null;
+        peerConnection.oniceconnectionstatechange = null;
+        peerConnection.onicegatheringstatechange = null;
+        peerConnection.onsignalingstatechange = null;
+        peerConnection.close();
+        peerConnection = null;
+    }
+    pendingCandidates = [];
+    sessionStarted = false;
+    shouldCreateOffer = false;
+    remoteVideo.srcObject = null;
+}
+
+function resetSessionState(message) {
+    roomId = null;
+    isCreator = false;
+    joinSection.style.display = "none";
+    if (message) setStatus(message);
+    cleanupPeerConnection();
 }
 
 function ensurePeerConnection() {
@@ -73,18 +99,6 @@ function ensurePeerConnection() {
         }
     };
 
-    peerConnection.oniceconnectionstatechange = () => {
-        console.log("ICE:", peerConnection.iceConnectionState);
-    };
-
-    peerConnection.onicegatheringstatechange = () => {
-        console.log("Gathering:", peerConnection.iceGatheringState);
-    };
-
-    peerConnection.onsignalingstatechange = () => {
-        console.log("Signaling:", peerConnection.signalingState);
-    };
-
     if (localStream) {
         localStream.getTracks().forEach((track) => {
             peerConnection.addTrack(track, localStream);
@@ -108,12 +122,33 @@ async function createLocalStream() {
     return localStream;
 }
 
+async function addTracksToPeerConnection() {
+    if (!peerConnection || !localStream) {
+        return;
+    }
+
+    const senders = peerConnection.getSenders();
+    const hasVideo = senders.some((sender) => sender.track && sender.track.kind === "video");
+    const hasAudio = senders.some((sender) => sender.track && sender.track.kind === "audio");
+
+    if (!hasVideo) {
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (videoTrack) peerConnection.addTrack(videoTrack, localStream);
+    }
+
+    if (!hasAudio) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        if (audioTrack) peerConnection.addTrack(audioTrack, localStream);
+    }
+}
+
 async function startOfferIfNeeded() {
     if (!isCreator || sessionStarted || !roomId) {
         return;
     }
 
     const pc = ensurePeerConnection();
+    await addTracksToPeerConnection();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     socket.emit("offer", { roomId, offer });
@@ -129,6 +164,11 @@ async function drainPendingCandidates() {
         const candidate = pendingCandidates.shift();
         await peerConnection.addIceCandidate(candidate);
     }
+}
+
+function endSession() {
+    socket.emit("end-session");
+    resetSessionState("تم إنهاء الجلسة");
 }
 
 remoteVideo.onclick = () => {
@@ -161,6 +201,7 @@ socket.on("offer", async (offer) => {
 
         const pc = ensurePeerConnection();
         await pc.setRemoteDescription(offer);
+        await addTracksToPeerConnection();
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("answer", { roomId, answer });
@@ -205,16 +246,11 @@ socket.on("ice-candidate", async (candidate) => {
 });
 
 socket.on("room-ended", () => {
-    setStatus("تم إنهاء الجلسة");
-    pendingCandidates = [];
-    sessionStarted = false;
+    resetSessionState("تم إنهاء الجلسة");
+});
 
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
-
-    remoteVideo.srcObject = null;
+socket.on("peer-left", () => {
+    resetSessionState("غادر الطرف الآخر الجلسة");
 });
 
 cameraBtn.onclick = async () => {
@@ -292,6 +328,7 @@ async function createRoom() {
         };
 
         ensurePeerConnection();
+        await startOfferIfNeeded();
     });
 }
 
@@ -365,3 +402,4 @@ switchCameraBtn.onclick = async () => {
 
 window.createRoom = createRoom;
 window.joinRoom = joinRoom;
+window.endSession = endSession;
