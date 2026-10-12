@@ -19,37 +19,32 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "*")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-app.use(helmet());
-app.use(compression());
-app.use(cors({
+const corsOptions = {
   origin: allowedOrigins.includes("*") ? true : allowedOrigins,
   methods: ["GET", "POST"],
   credentials: true
-}));
+};
+
+app.use(helmet());
+app.use(compression());
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "100kb" }));
 app.use(express.urlencoded({ extended: false, limit: "100kb" }));
-app.use(express.static(path.join(__dirname)));
-
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 200,
   standardHeaders: true,
   legacyHeaders: false
 }));
+app.use(express.static(path.join(__dirname)));
 
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins.includes("*") ? true : allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
+const io = new Server(server, { cors: corsOptions });
 
 const rooms = new Map();
 const socketRoomMap = new Map();
-const ROOM_TTL_MS = 1000 * 60 * 60;
 const roomTimers = new Map();
+const ROOM_TTL_MS = 60 * 60 * 1000;
 
 function buildRoomId() {
   return crypto.randomBytes(3).toString("hex").toUpperCase();
@@ -61,39 +56,38 @@ function clearRoomTimer(roomId) {
   roomTimers.delete(roomId);
 }
 
+function destroyRoom(roomId, reason = "room-ended") {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  clearRoomTimer(roomId);
+  for (const memberId of room.members) {
+    socketRoomMap.delete(memberId);
+  }
+  io.to(roomId).emit(reason, { roomId });
+  rooms.delete(roomId);
+  console.log(`[room] destroyed ${roomId} (${reason})`);
+}
+
 function scheduleRoomCleanup(roomId) {
   clearRoomTimer(roomId);
   const timer = setTimeout(() => {
     const room = rooms.get(roomId);
     if (room && room.members.size === 0) {
       rooms.delete(roomId);
+      console.log(`[room] expired empty room ${roomId}`);
     }
     roomTimers.delete(roomId);
   }, ROOM_TTL_MS);
   roomTimers.set(roomId, timer);
 }
 
-function getRoom(socketId) {
+function getRoomBySocket(socketId) {
   const roomId = socketRoomMap.get(socketId);
-  if (!roomId) return null;
-  return rooms.get(roomId) || null;
+  return roomId ? rooms.get(roomId) || null : null;
 }
 
-function endRoom(roomId, reason = "room-ended") {
-  const room = rooms.get(roomId);
-  if (!room) return;
-
-  clearRoomTimer(roomId);
-
-  for (const memberId of room.members) {
-    socketRoomMap.delete(memberId);
-  }
-
-  io.to(roomId).emit(reason, { roomId });
-  rooms.delete(roomId);
-}
-
-function removeSocketFromRoom(socketId) {
+function detachSocket(socketId) {
   const roomId = socketRoomMap.get(socketId);
   if (!roomId) return;
 
@@ -102,23 +96,20 @@ function removeSocketFromRoom(socketId) {
   if (!room) return;
 
   room.members.delete(socketId);
-
   if (room.members.size === 0) {
     scheduleRoomCleanup(roomId);
     return;
   }
 
   if (room.creator === socketId) {
-    endRoom(roomId, "room-ended");
+    destroyRoom(roomId, "room-ended");
     return;
   }
 
-  io.to(roomId).emit("peer-left", { roomId });
+  io.to(roomId).emit("peer-left", { roomId, userId: socketId });
 }
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 io.on("connection", (socket) => {
   console.log(`[socket] connected ${socket.id}`);
@@ -126,16 +117,12 @@ io.on("connection", (socket) => {
   socket.on("create-room", (callback) => {
     try {
       const roomId = buildRoomId();
-      rooms.set(roomId, {
-        creator: socket.id,
-        members: new Set([socket.id]),
-        createdAt: Date.now()
-      });
+      rooms.set(roomId, { creator: socket.id, members: new Set([socket.id]), createdAt: Date.now() });
       socketRoomMap.set(socket.id, roomId);
       socket.join(roomId);
       scheduleRoomCleanup(roomId);
-      console.log(`[room] created ${roomId} by ${socket.id}`);
       if (typeof callback === "function") callback({ success: true, roomId });
+      console.log(`[room] created ${roomId}`);
     } catch (error) {
       console.error("[room] create error", error);
       if (typeof callback === "function") callback({ success: false, message: "تعذّر إنشاء الجلسة" });
@@ -151,7 +138,6 @@ io.on("connection", (socket) => {
 
       const normalizedRoomId = roomId.trim().toUpperCase();
       const room = rooms.get(normalizedRoomId);
-
       if (!room) {
         if (typeof callback === "function") callback({ success: false, message: "الجلسة غير موجودة" });
         return;
@@ -166,13 +152,9 @@ io.on("connection", (socket) => {
       socketRoomMap.set(socket.id, normalizedRoomId);
       socket.join(normalizedRoomId);
       scheduleRoomCleanup(normalizedRoomId);
-      console.log(`[room] ${socket.id} joined ${normalizedRoomId}`);
-
-      if (typeof callback === "function") {
-        callback({ success: true, roomId: normalizedRoomId, creatorId: room.creator });
-      }
-
+      if (typeof callback === "function") callback({ success: true, roomId: normalizedRoomId, creatorId: room.creator });
       socket.to(normalizedRoomId).emit("user-joined", { roomId: normalizedRoomId, userId: socket.id });
+      console.log(`[room] ${socket.id} joined ${normalizedRoomId}`);
     } catch (error) {
       console.error("[room] join error", error);
       if (typeof callback === "function") callback({ success: false, message: "تعذّر الانضمام" });
@@ -207,29 +189,20 @@ io.on("connection", (socket) => {
   });
 
   socket.on("end-session", () => {
-    const room = getRoom(socket.id);
-    if (room) endRoom(socketRoomMap.get(socket.id), "room-ended");
+    const room = getRoomBySocket(socket.id);
+    if (room) destroyRoom(socketRoomMap.get(socket.id), "room-ended");
   });
 
   socket.on("disconnect", (reason) => {
     console.log(`[socket] disconnected ${socket.id}: ${reason}`);
-    removeSocketFromRoom(socket.id);
+    detachSocket(socket.id);
   });
 
-  socket.on("error", (error) => {
-    console.error(`[socket] error ${socket.id}`, error);
-  });
+  socket.on("error", (error) => console.error(`[socket] error ${socket.id}`, error));
 });
 
-process.on("uncaughtException", (error) => {
-  console.error("[fatal] uncaughtException", error);
-});
-
-process.on("unhandledRejection", (error) => {
-  console.error("[fatal] unhandledRejection", error);
-});
+process.on("uncaughtException", (error) => console.error("[fatal] uncaughtException", error));
+process.on("unhandledRejection", (error) => console.error("[fatal] unhandledRejection", error));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
