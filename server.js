@@ -109,8 +109,9 @@ function scheduleRoomCleanup(roomId) {
 }
 
 function issueRoomSignal(room, socket) {
-  room.tokens.set(socket.id, buildSessionToken());
-  return room.tokens.get(socket.id);
+  const token = buildSessionToken();
+  room.tokens.set(socket.id, token);
+  return token;
 }
 
 function validateSession(socket, payload) {
@@ -131,6 +132,10 @@ function safeAck(callback, payload) {
 
 function validateSignalPayload(payload, field) {
   return Boolean(payload && typeof payload.roomId === "string" && payload[field]);
+}
+
+function getRoomIdForSignal(room) {
+  return room ? room.id : null;
 }
 
 function detachSocket(socketId) {
@@ -167,6 +172,7 @@ io.on("connection", (socket) => {
       const roomId = buildRoomId();
       const sessionToken = buildSessionToken();
       rooms.set(roomId, {
+        id: roomId,
         creator: socket.id,
         members: new Set([socket.id]),
         tokens: new Map([[socket.id, sessionToken]]),
@@ -240,7 +246,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "offer")) return;
-      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("offer", {
+      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("offer", {
         offer: data.offer,
         roomId: data.roomId,
         senderId: socket.id
@@ -254,7 +260,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "answer")) return;
-      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("answer", {
+      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("answer", {
         answer: data.answer,
         roomId: data.roomId,
         senderId: socket.id
@@ -268,7 +274,7 @@ io.on("connection", (socket) => {
     try {
       const validation = validateSession(socket, data);
       if (!validation.ok || !validateSignalPayload(data, "candidate")) return;
-      socket.to(validation.room.id || socketRoomMap.get(socket.id)).emit("ice-candidate", {
+      io.to(getRoomIdForSignal(validation.room)).except(socket.id).emit("ice-candidate", {
         candidate: data.candidate,
         roomId: data.roomId,
         senderId: socket.id
