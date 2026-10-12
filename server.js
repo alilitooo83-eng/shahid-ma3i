@@ -1,4 +1,3 @@
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -12,6 +11,30 @@ const io = new Server(server);
 app.use(express.static(path.join(__dirname)));
 
 const rooms = new Map();
+const socketRoomMap = new Map();
+
+function removeSocketFromRoom(socketId) {
+    const roomId = socketRoomMap.get(socketId);
+    if (!roomId) {
+        return;
+    }
+
+    const room = rooms.get(roomId);
+    if (!room) {
+        socketRoomMap.delete(socketId);
+        return;
+    }
+
+    room.members.delete(socketId);
+    socketRoomMap.delete(socketId);
+
+    if (room.members.size === 0) {
+        rooms.delete(roomId);
+        return;
+    }
+
+    io.to(roomId).emit("room-ended");
+}
 
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
@@ -24,7 +47,9 @@ io.on("connection", (socket) => {
             members: new Set([socket.id])
         });
 
+        socketRoomMap.set(socket.id, roomId);
         socket.join(roomId);
+
         console.log("Room created:", roomId);
 
         if (typeof callback === "function") {
@@ -33,9 +58,12 @@ io.on("connection", (socket) => {
     });
 
     socket.on("join-room", (roomId, callback) => {
-        console.log("JOIN REQUEST:", roomId, socket.id);
-        console.log("Rooms:", [...rooms.keys()]);
-        if (typeof roomId !== "string") return;
+        if (typeof roomId !== "string") {
+            if (typeof callback === "function") {
+                callback({ success: false, message: "رمز الجلسة غير صالح" });
+            }
+            return;
+        }
 
         roomId = roomId.trim().toUpperCase();
         const room = rooms.get(roomId);
@@ -54,9 +82,8 @@ io.on("connection", (socket) => {
             return;
         }
 
-        const existingMember = [...room.members].find(id => id !== socket.id);
-
         room.members.add(socket.id);
+        socketRoomMap.set(socket.id, roomId);
         socket.join(roomId);
 
         console.log("User joined room:", roomId);
@@ -65,9 +92,7 @@ io.on("connection", (socket) => {
             callback({ success: true, roomId });
         }
 
-        if (existingMember) {
-            io.to(existingMember).emit("user-joined");
-        }
+        socket.to(roomId).emit("user-joined");
     });
 
     socket.on("offer", (data) => {
@@ -90,15 +115,7 @@ io.on("connection", (socket) => {
 
     socket.on("disconnect", () => {
         console.log("User disconnected:", socket.id);
-
-        for (const [roomId, room] of rooms) {
-            room.members.delete(socket.id);
-
-            if (room.members.size === 0) {
-                rooms.delete(roomId);
-                console.log("Room removed:", roomId);
-            }
-        }
+        removeSocketFromRoom(socket.id);
     });
 });
 
