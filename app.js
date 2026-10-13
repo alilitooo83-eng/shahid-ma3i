@@ -414,34 +414,73 @@ async function endSession() {
 async function switchCamera() {
   if (!localStream || sessionEnded) return;
 
-  currentFacingMode =
-    currentFacingMode === "user" ? "environment" : "user";
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cameras = devices.filter(d => d.kind === "videoinput");
 
-  const nextStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: currentFacingMode },
-    audio: true
-  });
+    let constraints;
 
-  const nextVideoTrack = nextStream.getVideoTracks()[0];
-  const oldStream = localStream;
+    if (cameras.length > 1) {
+      const currentTrack = localStream.getVideoTracks()[0];
+      const currentSettings = currentTrack.getSettings();
 
-  localStream = nextStream;
-  localVideo.srcObject = nextStream;
+      let index = cameras.findIndex(
+        c => c.deviceId === currentSettings.deviceId
+      );
 
-  if (peerConnection && nextVideoTrack) {
+      index = (index + 1) % cameras.length;
+
+      constraints = {
+        video: {
+          deviceId: {
+            exact: cameras[index].deviceId
+          }
+        },
+        audio: true
+      };
+    } else {
+      currentFacingMode =
+        currentFacingMode === "user"
+          ? "environment"
+          : "user";
+
+      constraints = {
+        video: {
+          facingMode: currentFacingMode
+        },
+        audio: true
+      };
+    }
+
+    const nextStream =
+      await navigator.mediaDevices.getUserMedia(constraints);
+
+    const nextVideoTrack = nextStream.getVideoTracks()[0];
+
     const sender = peerConnection
-      .getSenders()
-      .find((item) => item.track?.kind === "video");
+      ?.getSenders()
+      .find(s => s.track && s.track.kind === "video");
 
     if (sender) {
       await sender.replaceTrack(nextVideoTrack);
     }
+
+    const oldVideoTrack = localStream.getVideoTracks()[0];
+
+    localVideo.srcObject = nextStream;
+    localStream = nextStream;
+
+    if (oldVideoTrack) {
+      oldVideoTrack.stop();
+    }
+
+    setStatus("تم تبديل الكاميرا ✅");
+
+  } catch (err) {
+    console.error(err);
+    setStatus("تعذر تبديل الكاميرا");
   }
-
-  stopTracks(oldStream);
-  setStatus("تم تبديل الكاميرا ✅");
 }
-
 function showInvite(room) {
   inviteLink = `${window.location.origin}/?room=${encodeURIComponent(room)}`;
 
