@@ -56,6 +56,11 @@ function log(tag, details = '') {
   console.log(`[SERVER] ${tag}`, details);
 }
 
+function trace(tag, details = '') {
+  const timestamp = new Date().toISOString();
+  console.log(`[TRACE ${timestamp}] ${tag}`, details);
+}
+
 function randomToken(bytes) {
   return crypto.randomBytes(bytes).toString('hex').toUpperCase();
 }
@@ -123,6 +128,7 @@ function destroyRoom(roomId, reason) {
   clearRoomTimer(roomId);
   rooms.delete(roomId);
   log('ROOM_DESTROYED', `${roomId}${reason ? ` (${reason})` : ''}`);
+  trace('ROOM_ENDED', { roomId, reason, timestamp: new Date().toISOString() });
 }
 
 function removeSocketFromRoom(socketId, reason) {
@@ -178,6 +184,7 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 io.on('connection', (socket) => {
   log('SOCKET_CONNECTED', socket.id);
+  trace('SOCKET_CONNECTED', { socketId: socket.id, timestamp: new Date().toISOString() });
 
   socket.on('create-room', (callback) => {
     try {
@@ -198,6 +205,7 @@ io.on('connection', (socket) => {
       scheduleRoomCleanup(roomId);
       safeAck(callback, { success: true, roomId, sessionToken, role: 'creator' });
       log('ROOM_CREATED', roomId);
+      trace('ROOM_CREATED', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] create-room failed', error);
       safeAck(callback, { success: false, message: 'تعذّر إنشاء الجلسة' });
@@ -207,12 +215,20 @@ io.on('connection', (socket) => {
   socket.on('join-room', (payload, callback) => {
     try {
       const roomId = normalizeRoomId(payload && payload.roomId);
+      trace('JOIN_ROOM_REQUEST', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
       if (!roomId) return safeAck(callback, { success: false, message: 'رمز الجلسة غير صالح' });
 
       const room = rooms.get(roomId);
-      if (!room) return safeAck(callback, { success: false, message: 'الجلسة غير موجودة' });
-      if (room.ended) return safeAck(callback, { success: false, message: 'انتهت الجلسة' });
+      if (!room) {
+        trace('JOIN_ROOM_FAILED', { roomId, socketId: socket.id, reason: 'room-not-found', timestamp: new Date().toISOString() });
+        return safeAck(callback, { success: false, message: 'الجلسة غير موجودة' });
+      }
+      if (room.ended) {
+        trace('JOIN_ROOM_FAILED', { roomId, socketId: socket.id, reason: 'room-ended', timestamp: new Date().toISOString() });
+        return safeAck(callback, { success: false, message: 'انتهت الجلسة' });
+      }
       if (room.members.size >= MAX_ROOM_MEMBERS && !room.members.has(socket.id)) {
+        trace('JOIN_ROOM_FAILED', { roomId, socketId: socket.id, reason: 'room-full', timestamp: new Date().toISOString() });
         return safeAck(callback, { success: false, message: 'الجلسة مكتملة' });
       }
 
@@ -237,6 +253,8 @@ io.on('connection', (socket) => {
       });
 
       log('USER_JOINED', `${socket.id} -> ${roomId}`);
+      trace('JOIN_ROOM_SUCCESS', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
+      trace('USER_JOINED', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] join-room failed', error);
       safeAck(callback, { success: false, message: 'تعذّر الانضمام' });
@@ -254,6 +272,7 @@ io.on('connection', (socket) => {
         senderId: socket.id,
       });
       log('OFFER_SENT', room.id);
+      trace('OFFER_FORWARDED', { roomId: room.id, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] offer failed', error);
     }
@@ -270,6 +289,7 @@ io.on('connection', (socket) => {
         senderId: socket.id,
       });
       log('ANSWER_SENT', room.id);
+      trace('ANSWER_FORWARDED', { roomId: room.id, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] answer failed', error);
     }
@@ -285,6 +305,7 @@ io.on('connection', (socket) => {
         senderId: socket.id,
       });
       log('ICE_SENT', room.id);
+      trace('ICE_FORWARDED', { roomId: room.id, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] ice-candidate failed', error);
     }
@@ -298,6 +319,7 @@ io.on('connection', (socket) => {
 
       destroyRoom(room.id, 'creator-ended');
       safeAck(callback, { success: true });
+      trace('ROOM_ENDED', { roomId: room.id, socketId: socket.id, timestamp: new Date().toISOString() });
     } catch (error) {
       console.error('[SERVER] end-session failed', error);
       safeAck(callback, { success: false, message: 'تعذّر إنهاء الجلسة' });
@@ -306,6 +328,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', (reason) => {
     log('DISCONNECTED', `${socket.id} :: ${reason}`);
+    trace('SOCKET_DISCONNECTED', { socketId: socket.id, reason, timestamp: new Date().toISOString() });
     removeSocketFromRoom(socket.id, reason);
   });
 });
