@@ -2,6 +2,17 @@
 
 تطبيق مساعدة مرئية عن بُعد مبني على WebRTC وSocket.IO، مع دعم إعادة الاتصال، وتبادل ICE candidates، وإنهاء الجلسة بشكل منظم.
 
+## حالة البنية
+المشروع الآن منظم مباشرة في جذر المستودع:
+- `index.html`
+- `style.css`
+- `app.js`
+- `server.js`
+- `package.json`
+- `.env.example`
+- `.gitignore`
+- `docs/`
+
 ## المزايا
 - إنشاء جلسة مؤقتة برمز ورابط دعوة.
 - دعم session token لتأمين إشارات WebRTC.
