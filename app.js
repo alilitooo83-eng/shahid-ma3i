@@ -596,10 +596,13 @@ function bindSocketEvents() {
   });
 
   socket.on("user-joined", async () => {
+    console.log("USER_JOINED event received");
+    log("USER_JOINED_EVENT");
+
     if (roomRole === "creator") {
-      await createOffer();
+        await createOffer();
     }
-  });
+});
 
   socket.on("offer", async (payload) => {
     await handleOffer(payload);
