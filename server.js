@@ -296,13 +296,8 @@ io.on('connection', (socket) => {
       if (!room) return safeAck(callback, { success: false, message: 'لا توجد جلسة نشطة' });
       if (room.creator !== socket.id) return safeAck(callback, { success: false, message: 'فقط المنشئ يستطيع إنهاء الجلسة' });
 
-      const roomId = room.id;
-      io.to(roomId).emit('room-ended', { roomId, reason: 'creator-ended' });
-      for (const memberId of room.members) socketRoomMap.delete(memberId);
-      clearRoomTimer(roomId);
-      rooms.delete(roomId);
+      destroyRoom(room.id, 'creator-ended');
       safeAck(callback, { success: true });
-      log('ROOM_DESTROYED', `${roomId} (ended)`);
     } catch (error) {
       console.error('[SERVER] end-session failed', error);
       safeAck(callback, { success: false, message: 'تعذّر إنهاء الجلسة' });
