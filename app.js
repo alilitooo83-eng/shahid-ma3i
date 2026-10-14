@@ -414,15 +414,36 @@ async function endSession() {
 async function switchCamera() {
   if (!localStream || sessionEnded) return;
 
-  currentFacingMode =
-    currentFacingMode === "user" ? "environment" : "user";
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cameras = devices.filter((device) => device.kind === "videoinput");
+
+  if (cameras.length < 2) {
+    setStatus("لم يتم العثور على كاميرا أخرى");
+    return;
+  }
+
+  const currentTrack = localStream.getVideoTracks()[0];
+  const currentDeviceId = currentTrack?.getSettings().deviceId;
+
+  let currentIndex = cameras.findIndex(
+    (camera) => camera.deviceId === currentDeviceId
+  );
+
+  if (currentIndex < 0) {
+    currentIndex = currentFacingMode === "user" ? 0 : 1;
+  }
+
+  const nextCamera = cameras[(currentIndex + 1) % cameras.length];
 
   const nextStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: currentFacingMode }
+    video: { deviceId: { exact: nextCamera.deviceId } }
   });
 
   const nextVideoTrack = nextStream.getVideoTracks()[0];
-  if (!nextVideoTrack) return;
+  if (!nextVideoTrack) {
+    stopTracks(nextStream);
+    return;
+  }
 
   const oldVideoTrack = localStream.getVideoTracks()[0];
   const audioTracks = localStream.getAudioTracks();
@@ -437,17 +458,19 @@ async function switchCamera() {
     }
   }
 
-  const newStream = new MediaStream([
+  localStream = new MediaStream([
     nextVideoTrack,
     ...audioTracks
   ]);
 
-  localStream = newStream;
-  localVideo.srcObject = newStream;
+  localVideo.srcObject = localStream;
 
   if (oldVideoTrack) {
     oldVideoTrack.stop();
   }
+
+  currentFacingMode =
+    currentFacingMode === "user" ? "environment" : "user";
 
   setStatus("تم تبديل الكاميرا ✅");
 }
