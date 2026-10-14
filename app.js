@@ -414,39 +414,63 @@ async function endSession() {
 async function switchCamera() {
   if (!localStream || sessionEnded) return;
 
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  const cameras = devices.filter((device) => device.kind === "videoinput");
-
-  if (cameras.length < 2) {
-    setStatus("لم يتم العثور على كاميرا أخرى");
+  const oldVideoTrack = localStream.getVideoTracks()[0];
+  if (!oldVideoTrack) {
+    setStatus("لم يتم العثور على مسار الكاميرا الحالي");
     return;
   }
 
-  const currentTrack = localStream.getVideoTracks()[0];
-  const currentDeviceId = currentTrack?.getSettings().deviceId;
+  const audioTracks = localStream.getAudioTracks();
+  const currentSettings = oldVideoTrack.getSettings();
+  const currentMode = currentSettings.facingMode || currentFacingMode;
+  const nextMode = currentMode === "environment" ? "user" : "environment";
 
-  let currentIndex = cameras.findIndex(
-    (camera) => camera.deviceId === currentDeviceId
-  );
+  // Some mobile browsers cannot open the other camera while the current one is active.
+  oldVideoTrack.stop();
 
-  if (currentIndex < 0) {
-    currentIndex = currentFacingMode === "user" ? 0 : 1;
+  let nextStream;
+  try {
+    nextStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: nextMode } },
+      audio: false
+    });
+  } catch (modeError) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter((device) => device.kind === "videoinput");
+      const currentDeviceId = currentSettings.deviceId;
+      const nextCamera = cameras.find((camera) => camera.deviceId !== currentDeviceId);
+
+      if (!nextCamera) throw modeError;
+
+      nextStream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: nextCamera.deviceId } },
+        audio: false
+      });
+    } catch (deviceError) {
+      console.error("[WebRTC] switchCamera failed", deviceError);
+      try {
+        nextStream = await navigator.mediaDevices.getUserMedia({
+          video: currentSettings.facingMode
+            ? { facingMode: { exact: currentSettings.facingMode } }
+            : { facingMode: currentFacingMode },
+          audio: false
+        });
+      } catch (restoreError) {
+        console.error("[WebRTC] camera restore failed", restoreError);
+        setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
+        return;
+      }
+      setStatus("تعذّر تبديل الكاميرا؛ أُعيد تشغيل الكاميرا السابقة");
+    }
   }
 
-  const nextCamera = cameras[(currentIndex + 1) % cameras.length];
-
-  const nextStream = await navigator.mediaDevices.getUserMedia({
-    video: { deviceId: { exact: nextCamera.deviceId } }
-  });
-
-  const nextVideoTrack = nextStream.getVideoTracks()[0];
+  const nextVideoTrack = nextStream?.getVideoTracks()[0];
   if (!nextVideoTrack) {
     stopTracks(nextStream);
+    setStatus("لم يتم العثور على مسار الكاميرا الجديدة");
     return;
   }
-
-  const oldVideoTrack = localStream.getVideoTracks()[0];
-  const audioTracks = localStream.getAudioTracks();
 
   if (peerConnection) {
     const sender = peerConnection
@@ -458,20 +482,10 @@ async function switchCamera() {
     }
   }
 
-  localStream = new MediaStream([
-    nextVideoTrack,
-    ...audioTracks
-  ]);
-
+  localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
   localVideo.srcObject = localStream;
 
-  if (oldVideoTrack) {
-    oldVideoTrack.stop();
-  }
-
-  currentFacingMode =
-    currentFacingMode === "user" ? "environment" : "user";
-
+  currentFacingMode = nextVideoTrack.getSettings().facingMode || nextMode;
   setStatus("تم تبديل الكاميرا ✅");
 }
 
