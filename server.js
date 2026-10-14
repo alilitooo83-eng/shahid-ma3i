@@ -288,14 +288,20 @@ io.on('connection', (socket) => {
         creatorId: room.creator,
       });
 
-      socket.to(roomId).emit('user-joined', {
+      io.to(room.creator).emit('session-ready', {
         roomId,
-        userId: socket.id,
+        creatorId: room.creator,
+        guestId: socket.id,
       });
 
-      log('USER_JOINED', `${socket.id} -> ${roomId}`);
+      log('SESSION_READY', `${room.creator} <-> ${socket.id} @ ${roomId}`);
       trace('JOIN_ROOM_SUCCESS', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
-      trace('USER_JOINED', { roomId, socketId: socket.id, timestamp: new Date().toISOString() });
+      trace('SESSION_READY', {
+        roomId,
+        creatorId: room.creator,
+        guestId: socket.id,
+        timestamp: new Date().toISOString(),
+      });
     } catch (error) {
       console.error('[SERVER] join-room failed', error);
       safeAck(callback, { success: false, message: 'تعذّر الانضمام' });
