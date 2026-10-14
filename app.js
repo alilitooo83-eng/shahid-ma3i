@@ -299,6 +299,11 @@ async function handleOffer(payload) {
   const pc = ensurePeerConnection();
   addLocalTracksOnce();
 
+  if (pc.signalingState === "have-local-offer") {
+    log("OFFER_COLLISION", pc.signalingState);
+    return;
+  }
+
   try {
     log("OFFER_RECEIVED");
     await pc.setRemoteDescription(payload.offer);
@@ -530,9 +535,14 @@ async function switchCamera() {
 
   localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
   localVideo.srcObject = localStream;
-  currentFacingMode = nextVideoTrack.getSettings().facingMode || (didSwitch ? nextMode : currentFacingMode);
+  currentFacingMode = nextMode;
   stopTracks(nextStream);
-  setStatus("تم تبديل الكاميرا ✅");
+
+  if (didSwitch) {
+    setStatus("تم تبديل الكاميرا ✅");
+  } else {
+    setStatus("تعذّر تبديل الكاميرا، لكن تم الحفاظ على الكاميرا الحالية ✅");
+  }
 }
 
 function showInvite(room) {
@@ -576,6 +586,25 @@ function showInvite(room) {
   };
 }
 
+async function triggerInitialOffer() {
+  if (roomRole !== "creator" || sessionEnded || initialOfferSent || !sessionReadyReceived || !joinResponseReceived) {
+    return;
+  }
+
+  ensurePeerConnection();
+  addLocalTracksOnce();
+
+  if (initialOfferTimer) {
+    clearTimeout(initialOfferTimer);
+  }
+
+  initialOfferTimer = setTimeout(async () => {
+    initialOfferTimer = null;
+    if (sessionEnded || initialOfferSent || !sessionReadyReceived || !joinResponseReceived) return;
+    await createOffer(false);
+  }, 0);
+}
+
 async function createRoom() {
   if (roomId || sessionEnded === false && roomRole) return;
 
@@ -603,7 +632,7 @@ async function createRoom() {
       setStatus("تم إنشاء الجلسة. أرسل الرابط وانتظر انضمام الطرف الآخر.");
       log("ROOM_CREATED", roomId);
 
-      // The server will notify the creator with session-ready when the guest joins.
+      // The server-driven ready event will start the initial offer.
     });
   } catch (error) {
     console.error("[WebRTC] createRoom failed", error);
@@ -644,7 +673,7 @@ async function joinRoom(targetRoomId) {
       log("ROOM_JOINED", roomId);
 
       // Guest never creates the initial offer.
-      // The creator starts exactly one offer after receiving session-ready.
+      // The creator creates exactly one offer after session-ready.
     });
   } catch (error) {
     console.error("[WebRTC] joinRoom failed", error);
@@ -655,24 +684,11 @@ async function joinRoom(targetRoomId) {
 
 socket.on("session-ready", async (payload) => {
   if (sessionEnded || roomRole !== "creator") return;
-  if (!payload?.roomId || payload.roomId !== roomId) return;
-  if (initialOfferSent || offerInFlight) return;
+  if (roomId && payload?.roomId && payload.roomId !== roomId) return;
 
   sessionReadyReceived = true;
-  log("SESSION_READY", payload);
-
-  ensurePeerConnection();
-  addLocalTracksOnce();
-
-  if (initialOfferTimer) {
-    clearTimeout(initialOfferTimer);
-    initialOfferTimer = null;
-  }
-
-  initialOfferTimer = setTimeout(async () => {
-    if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
-    await createOffer();
-  }, 0);
+  log("SESSION_READY_RECEIVED", payload?.roomId || roomId || "");
+  await triggerInitialOffer();
 });
 
 socket.on("offer", handleOffer);
@@ -694,8 +710,6 @@ socket.on("connect", async () => {
 
   if (reconnecting && roomId && sessionToken) {
     setStatus("عاد اتصال الخادم، جاري استعادة الجلسة…");
-    // The current server binds the session to a socket ID.
-    // Do not create another PeerConnection or another offer here.
     reconnecting = false;
   } else if (!roomId) {
     setStatus("متصل بالخادم");
