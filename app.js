@@ -414,86 +414,34 @@ async function endSession() {
 async function switchCamera() {
   if (!localStream || sessionEnded) return;
 
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cameras = devices.filter(d => d.kind === "videoinput");
-    console.log("===== CAMERAS =====");
-    console.log("Camera count:", cameras.length);
+  currentFacingMode =
+    currentFacingMode === "user" ? "environment" : "user";
 
-    cameras.forEach((camera, index) => {
-        console.log(index, camera.label, camera.deviceId);
-    });
+  const nextStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: currentFacingMode },
+    audio: true
+  });
 
-    const currentTrack = localStream.getVideoTracks()[0];
+  const nextVideoTrack = nextStream.getVideoTracks()[0];
+  const oldStream = localStream;
 
-    console.log(
-        "Current camera:",
-        currentTrack.getSettings()
-    );
+  localStream = nextStream;
+  localVideo.srcObject = nextStream;
 
-    let constraints;
-
-    if (cameras.length > 1) {
-      const currentTrack = localStream.getVideoTracks()[0];
-      const currentSettings = currentTrack.getSettings();
-
-      let index = cameras.findIndex(
-        c => c.deviceId === currentSettings.deviceId
-      );
-
-      index = (index + 1) % cameras.length;
-
-      constraints = {
-        video: {
-          deviceId: {
-            exact: cameras[index].deviceId
-          }
-        },
-        audio: true
-      };
-    } else {
-      currentFacingMode =
-        currentFacingMode === "user"
-          ? "environment"
-          : "user";
-
-      constraints = {
-        video: {
-          facingMode: currentFacingMode
-        },
-        audio: true
-      };
-    }
-
-    const nextStream =
-      await navigator.mediaDevices.getUserMedia(constraints);
-
-    const nextVideoTrack = nextStream.getVideoTracks()[0];
-
+  if (peerConnection && nextVideoTrack) {
     const sender = peerConnection
-      ?.getSenders()
-      .find(s => s.track && s.track.kind === "video");
+      .getSenders()
+      .find((item) => item.track?.kind === "video");
 
     if (sender) {
       await sender.replaceTrack(nextVideoTrack);
     }
-
-    const oldVideoTrack = localStream.getVideoTracks()[0];
-
-    localVideo.srcObject = nextStream;
-    localStream = nextStream;
-
-    if (oldVideoTrack) {
-      oldVideoTrack.stop();
-    }
-
-    setStatus("تم تبديل الكاميرا ✅");
-
-  } catch (err) {
-    console.error(err);
-    setStatus("تعذر تبديل الكاميرا");
   }
+
+  stopTracks(oldStream);
+  setStatus("تم تبديل الكاميرا ✅");
 }
+
 function showInvite(room) {
   inviteLink = `${window.location.origin}/?room=${encodeURIComponent(room)}`;
 
@@ -536,4 +484,180 @@ function showInvite(room) {
 }
 
 async function createRoom() {
-  if (roomId... (truncated)
+  if (roomId || sessionEnded === false && roomRole) return;
+
+  sessionEnded = false;
+  roomRole = "creator";
+
+  try {
+    await loadIceConfig();
+    await ensureLocalStream();
+
+    socket.emit("create-room", async (result) => {
+      if (!result?.success) {
+        roomRole = null;
+        setStatus(result?.message || "تعذّر إنشاء الجلسة");
+        return;
+      }
+
+      roomId = result.roomId;
+      sessionToken = result.sessionToken;
+
+      ensurePeerConnection();
+      addLocalTracksOnce();
+      showInvite(roomId);
+
+      setStatus("تم إنشاء الجلسة. أرسل الرابط وانتظر انضمام الطرف الآخر.");
+      log("ROOM_CREATED", roomId);
+
+      // IMPORTANT: no offer here.
+      // The server emits user-joined only after the second peer joins.
+    });
+  } catch (error) {
+    console.error("[WebRTC] createRoom failed", error);
+    roomRole = null;
+    await cleanupLocalSession();
+    setStatus("تعذّر إنشاء الجلسة");
+  }
+}
+
+async function joinRoom(rawRoomId) {
+  const normalizedRoomId = String(rawRoomId || "").trim().toUpperCase();
+  if (!normalizedRoomId || sessionEnded === false && roomId) return;
+
+  sessionEnded = false;
+  roomRole = "guest";
+
+  try {
+    await loadIceConfig();
+    await ensureLocalStream();
+
+    socket.emit("join-room", { roomId: normalizedRoomId }, async (result) => {
+      if (!result?.success) {
+        roomRole = null;
+        setStatus(result?.message || "تعذّر الانضمام للجلسة");
+        return;
+      }
+
+      roomId = result.roomId;
+      sessionToken = result.sessionToken;
+
+      ensurePeerConnection();
+      addLocalTracksOnce();
+      sessionCodeEl.textContent = roomId;
+      sessionArea.hidden = false;
+      joinSection.hidden = true;
+
+      setStatus("تم الانضمام. بانتظار الاتصال بالطرف الآخر…");
+      log("ROOM_JOINED", roomId);
+    });
+  } catch (error) {
+    console.error("[WebRTC] joinRoom failed", error);
+    roomRole = null;
+    await cleanupLocalSession();
+    setStatus("تعذّر الانضمام للجلسة");
+  }
+}
+
+async function startCamera() {
+  try {
+    await ensureLocalStream();
+  } catch (error) {
+    console.error("[WebRTC] startCamera failed", error);
+    setStatus("تعذّر تشغيل الكاميرا");
+  }
+}
+
+function bindSocketEvents() {
+  socket.on("connect", () => {
+    log("SOCKET_CONNECTED", socket.id);
+    setStatus("تم الاتصال بالخادم ✅");
+  });
+
+  socket.on("connect_error", (error) => {
+    console.error("[WebRTC] socket connect_error", error);
+    setStatus("تعذّر الاتصال بالخادم");
+  });
+
+  socket.on("disconnect", (reason) => {
+    log("SOCKET_DISCONNECTED", reason);
+    if (!sessionEnded) {
+      setStatus("انقطع الاتصال بالخادم…");
+    }
+  });
+
+  socket.on("room-ended", async () => {
+    await cleanupLocalSession();
+    setStatus("انتهت الجلسة");
+  });
+
+  socket.on("peer-left", async () => {
+    setStatus("غادر الطرف الآخر الجلسة");
+  });
+
+  socket.on("user-joined", async () => {
+    console.log("USER_JOINED event received");
+    log("USER_JOINED_EVENT");
+
+    if (roomRole === "creator") {
+        await createOffer();
+    }
+});
+
+  socket.on("offer", async (payload) => {
+    await handleOffer(payload);
+  });
+
+  socket.on("answer", async (payload) => {
+    await handleAnswer(payload);
+  });
+
+  socket.on("ice-candidate", async (payload) => {
+    await handleCandidate(payload);
+  });
+}
+
+function bindUiEvents() {
+  if (cameraBtn) cameraBtn.addEventListener("click", startCamera);
+  if (switchCameraBtn) switchCameraBtn.addEventListener("click", switchCamera);
+  if (createRoomBtn) createRoomBtn.addEventListener("click", createRoom);
+  if (joinBtn) {
+    joinBtn.addEventListener("click", () => {
+      const value = joinInput ? joinInput.value : invitedRoomId;
+      joinRoom(value);
+    });
+  }
+  if (endRoomBtn) endRoomBtn.addEventListener("click", endSession);
+}
+
+async function init() {
+  bindSocketEvents();
+  bindUiEvents();
+  resetButtons();
+
+  if (invitedRoomId && joinInput) {
+    joinInput.value = invitedRoomId;
+  }
+
+  if (joinInput) {
+    joinInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        joinRoom(joinInput.value);
+      }
+    });
+  }
+
+  if (socket.connected) {
+    setStatus("تم الاتصال بالخادم ✅");
+  } else {
+    setStatus("جارٍ الاتصال بالخادم…");
+  }
+
+  try {
+    await loadIceConfig();
+  } catch (error) {
+    console.error("[WebRTC] init ice config failed", error);
+  }
+}
+
+init();
