@@ -156,7 +156,49 @@ function removeSocketFromRoom(socketId, reason) {
   }
 }
 
-app.get('/ice-config', (_req, res) => {
+app.get('/ice-config', async (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+
+  // Preferred production path: mint short-lived Cloudflare TURN credentials server-side.
+  // Keep both secrets in Railway Variables; never expose them to the browser.
+  const cloudflareTurnKeyId = (process.env.CLOUDFLARE_TURN_KEY_ID || '').trim();
+  const cloudflareTurnApiToken = (process.env.CLOUDFLARE_TURN_API_TOKEN || '').trim();
+
+  if (cloudflareTurnKeyId && cloudflareTurnApiToken) {
+    try {
+      const response = await fetch(
+        `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(cloudflareTurnKeyId)}/credentials/generate-ice-servers`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${cloudflareTurnApiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ttl: 86400 }),
+        }
+      );
+
+      if (!response.ok) {
+        log('CLOUDFLARE_TURN_CREDENTIALS_FAILED', `HTTP ${response.status}`);
+        return res.status(502).json({ error: 'TURN credentials temporarily unavailable' });
+      }
+
+      const config = await response.json();
+      const iceServers = Array.isArray(config.iceServers) ? config.iceServers : [];
+      if (!iceServers.some((server) => (server.urls || []).some((url) => String(url).startsWith('turn:') || String(url).startsWith('turns:')))) {
+        log('CLOUDFLARE_TURN_CREDENTIALS_INVALID');
+        return res.status(502).json({ error: 'TURN credentials response invalid' });
+      }
+
+      log('CLOUDFLARE_TURN_CREDENTIALS_READY');
+      return res.json({ iceServers, turnConfigured: true, provider: 'cloudflare' });
+    } catch (error) {
+      console.error('[SERVER] Cloudflare TURN credential request failed', error);
+      return res.status(502).json({ error: 'TURN credentials temporarily unavailable' });
+    }
+  }
+
+  // Backward-compatible path for an existing self-hosted/provider TURN server.
   const iceServers = [...FALLBACK_ICE_SERVERS];
   const turnUrls = (process.env.TURN_URL || '')
     .split(',')
@@ -173,7 +215,6 @@ app.get('/ice-config', (_req, res) => {
     });
   }
 
-  res.set('Cache-Control', 'no-store');
   res.json({
     iceServers,
     turnConfigured: iceServers.length > FALLBACK_ICE_SERVERS.length,
