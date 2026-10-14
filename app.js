@@ -418,17 +418,16 @@ async function switchCamera() {
     currentFacingMode === "user" ? "environment" : "user";
 
   const nextStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: currentFacingMode },
-    audio: true
+    video: { facingMode: currentFacingMode }
   });
 
   const nextVideoTrack = nextStream.getVideoTracks()[0];
-  const oldStream = localStream;
+  if (!nextVideoTrack) return;
 
-  localStream = nextStream;
-  localVideo.srcObject = nextStream;
+  const oldVideoTrack = localStream.getVideoTracks()[0];
+  const audioTracks = localStream.getAudioTracks();
 
-  if (peerConnection && nextVideoTrack) {
+  if (peerConnection) {
     const sender = peerConnection
       .getSenders()
       .find((item) => item.track?.kind === "video");
@@ -438,7 +437,18 @@ async function switchCamera() {
     }
   }
 
-  stopTracks(oldStream);
+  const newStream = new MediaStream([
+    nextVideoTrack,
+    ...audioTracks
+  ]);
+
+  localStream = newStream;
+  localVideo.srcObject = newStream;
+
+  if (oldVideoTrack) {
+    oldVideoTrack.stop();
+  }
+
   setStatus("تم تبديل الكاميرا ✅");
 }
 
