@@ -47,6 +47,8 @@ let localTracksAdded = false;
 let offerInFlight = false;
 let answerInFlight = false;
 let reconnecting = false;
+let iceRestartInFlight = false;
+let iceRestartAttempts = 0;
 
 function log(tag, details = "") {
   console.log(`[WebRTC] ${tag}`, details);
@@ -231,24 +233,28 @@ function ensurePeerConnection() {
     log("CONNECTION_STATE", state);
 
     if (state === "connected") {
+      iceRestartAttempts = 0;
       setStatus("الاتصال يعمل الآن ✅");
     } else if (state === "connecting") {
       setStatus("جاري الاتصال بالطرف الآخر…");
     } else if (state === "disconnected") {
       setStatus("انقطع الاتصال مؤقتًا…");
     } else if (state === "failed") {
-      setStatus("فشل اتصال WebRTC");
+      setStatus("فشل اتصال WebRTC؛ جارٍ محاولة استعادته…");
+      requestIceRestart("connection-failed");
     }
   };
 
   peerConnection.oniceconnectionstatechange = () => {
-    log("ICE_STATE", peerConnection?.iceConnectionState);
+    const state = peerConnection?.iceConnectionState;
+    log("ICE_STATE", state);
+    if (state === "failed") requestIceRestart("ice-failed");
   };
 
   return peerConnection;
 }
 
-async function createOffer() {
+async function createOffer(iceRestart = false) {
   if (
     roomRole !== "creator" ||
     sessionEnded ||
@@ -263,7 +269,7 @@ async function createOffer() {
 
   try {
     log("CREATE_OFFER");
-    const offer = await peerConnection.createOffer();
+    const offer = await peerConnection.createOffer(iceRestart ? { iceRestart: true } : undefined);
     await peerConnection.setLocalDescription(offer);
 
     emitWithSession("offer", {
@@ -351,6 +357,34 @@ function resetSignalingState() {
   localTracksAdded = false;
   offerInFlight = false;
   answerInFlight = false;
+  iceRestartInFlight = false;
+  iceRestartAttempts = 0;
+}
+
+function requestIceRestart(reason) {
+  if (roomRole !== "creator" || sessionEnded || iceRestartInFlight || iceRestartAttempts >= 2) {
+    return;
+  }
+
+  iceRestartInFlight = true;
+  setTimeout(async () => {
+    try {
+      if (
+        sessionEnded || roomRole !== "creator" || !peerConnection ||
+        peerConnection.signalingState !== "stable" || offerInFlight
+      ) {
+        return;
+      }
+
+      iceRestartAttempts += 1;
+      log("ICE_RESTART_ATTEMPT", { reason, attempt: iceRestartAttempts });
+      await createOffer(true);
+    } catch (error) {
+      console.error("[WebRTC] ICE restart failed", error);
+    } finally {
+      iceRestartInFlight = false;
+    }
+  }, 800);
 }
 
 async function cleanupLocalSession() {
