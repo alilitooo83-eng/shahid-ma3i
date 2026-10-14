@@ -53,6 +53,12 @@ let sessionReadyReceived = false;
 let initialOfferSent = false;
 let initialOfferTimer = null;
 let joinResponseReceived = false;
+let sessionBusy = false;
+let cameraSwitchInFlight = false;
+let cleanupInProgress = false;
+let endSessionInFlight = false;
+let roomOperationInFlight = false;
+let signalingTransitionInFlight = false;
 
 function log(tag, details = "") {
   console.log(`[WebRTC] ${tag}`, details);
@@ -89,6 +95,18 @@ function setInitialUi() {
   resetButtons();
 }
 
+function withLock(lockName, fn) {
+  if (sessionBusy) return false;
+  sessionBusy = true;
+  Promise.resolve()
+    .then(fn)
+    .catch((error) => console.error(`[WebRTC] ${lockName} failed`, error))
+    .finally(() => {
+      sessionBusy = false;
+    });
+  return true;
+}
+
 async function loadIceConfig() {
   if (serverIceServers) return serverIceServers;
   if (iceConfigPromise) return iceConfigPromise;
@@ -120,7 +138,6 @@ function getRtcConfig() {
     { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }
   ];
 
-  // Support existing inline configuration as a fallback for older deployments.
   if (!serverIceServers && TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
     iceServers.push({ urls: TURN_URL, username: TURN_USERNAME, credential: TURN_PASSWORD });
   }
@@ -304,6 +321,7 @@ async function handleOffer(payload) {
     return;
   }
 
+  signalingTransitionInFlight = true;
   try {
     log("OFFER_RECEIVED");
     await pc.setRemoteDescription(payload.offer);
@@ -322,6 +340,7 @@ async function handleOffer(payload) {
     console.error("[WebRTC] handleOffer failed", error);
   } finally {
     answerInFlight = false;
+    signalingTransitionInFlight = false;
   }
 }
 
@@ -335,6 +354,7 @@ async function handleAnswer(payload) {
     return;
   }
 
+  signalingTransitionInFlight = true;
   try {
     log("ANSWER_RECEIVED");
     await pc.setRemoteDescription(payload.answer);
@@ -342,6 +362,8 @@ async function handleAnswer(payload) {
     setStatus("تم تأسيس الاتصال ✅");
   } catch (error) {
     console.error("[WebRTC] handleAnswer failed", error);
+  } finally {
+    signalingTransitionInFlight = false;
   }
 }
 
@@ -371,6 +393,7 @@ function resetSignalingState() {
   sessionReadyReceived = false;
   initialOfferSent = false;
   joinResponseReceived = false;
+  signalingTransitionInFlight = false;
   if (initialOfferTimer) {
     clearTimeout(initialOfferTimer);
     initialOfferTimer = null;
@@ -404,32 +427,38 @@ function requestIceRestart(reason) {
 }
 
 async function cleanupLocalSession() {
-  sessionEnded = true;
-  reconnecting = false;
-  roomId = null;
-  sessionToken = null;
-  roomRole = null;
-  resetSignalingState();
+  if (cleanupInProgress) return;
+  cleanupInProgress = true;
+  try {
+    sessionEnded = true;
+    reconnecting = false;
+    roomId = null;
+    sessionToken = null;
+    roomRole = null;
+    resetSignalingState();
 
-  if (peerConnection) {
-    peerConnection.ontrack = null;
-    peerConnection.onicecandidate = null;
-    peerConnection.onconnectionstatechange = null;
-    peerConnection.oniceconnectionstatechange = null;
-    peerConnection.close();
-    peerConnection = null;
+    if (peerConnection) {
+      peerConnection.ontrack = null;
+      peerConnection.onicecandidate = null;
+      peerConnection.onconnectionstatechange = null;
+      peerConnection.oniceconnectionstatechange = null;
+      peerConnection.close();
+      peerConnection = null;
+    }
+
+    stopTracks(localStream);
+    localStream = null;
+
+    if (localVideo) localVideo.srcObject = null;
+    if (remoteVideo) remoteVideo.srcObject = null;
+
+    hideInviteCard();
+    setInitialUi();
+    setStatus("جاهز للعمل");
+    log("SESSION_CLEANED");
+  } finally {
+    cleanupInProgress = false;
   }
-
-  stopTracks(localStream);
-  localStream = null;
-
-  if (localVideo) localVideo.srcObject = null;
-  if (remoteVideo) remoteVideo.srcObject = null;
-
-  hideInviteCard();
-  setInitialUi();
-  setStatus("جاهز للعمل");
-  log("SESSION_CLEANED");
 }
 
 function hideInviteCard() {
@@ -441,32 +470,38 @@ function hideInviteCard() {
 }
 
 async function endSession() {
-  if (sessionEnded) return;
+  if (endSessionInFlight || sessionEnded) return;
+  endSessionInFlight = true;
+  try {
+    const activeRoomId = roomId;
+    const activeToken = sessionToken;
+    sessionEnded = true;
 
-  const activeRoomId = roomId;
-  const activeToken = sessionToken;
-  sessionEnded = true;
+    if (activeRoomId && activeToken) {
+      socket.emit("end-session", {
+        roomId: activeRoomId,
+        sessionToken: activeToken
+      });
+    }
 
-  if (activeRoomId && activeToken) {
-    socket.emit("end-session", {
-      roomId: activeRoomId,
-      sessionToken: activeToken
-    });
-  }
+    await cleanupLocalSession();
 
-  await cleanupLocalSession();
-
-  if (!socket.connected) {
-    socket.connect();
+    if (!socket.connected) {
+      socket.connect();
+    }
+  } finally {
+    endSessionInFlight = false;
   }
 }
 
 async function switchCamera() {
-  if (!localStream || sessionEnded) return;
+  if (cameraSwitchInFlight || !localStream || sessionEnded) return;
+  cameraSwitchInFlight = true;
 
   const oldVideoTrack = localStream.getVideoTracks()[0];
   if (!oldVideoTrack) {
     setStatus("لم يتم العثور على مسار الكاميرا الحالي");
+    cameraSwitchInFlight = false;
     return;
   }
 
@@ -511,6 +546,7 @@ async function switchCamera() {
       } catch (restoreError) {
         console.error("[WebRTC] camera restore failed", restoreError);
         setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
+        cameraSwitchInFlight = false;
         return;
       }
     }
@@ -520,6 +556,7 @@ async function switchCamera() {
   if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
     stopTracks(nextStream);
     setStatus("لم يتم العثور على مسار الكاميرا الجديدة");
+    cameraSwitchInFlight = false;
     return;
   }
 
@@ -578,10 +615,12 @@ async function switchCamera() {
 
     stopTracks(nextStream);
     setStatus("تعذّر تبديل الكاميرا. تم استرجاع الكاميرا السابقة.");
+    cameraSwitchInFlight = false;
     return;
   }
 
   stopTracks(nextStream);
+  cameraSwitchInFlight = false;
 }
 
 function showInvite(room) {
@@ -626,7 +665,8 @@ function showInvite(room) {
 }
 
 async function createRoom() {
-  if (roomId || sessionEnded === false && roomRole) return;
+  if (roomOperationInFlight || roomId || sessionEnded === false && roomRole) return;
+  roomOperationInFlight = true;
 
   sessionEnded = false;
   roomRole = "creator";
@@ -639,6 +679,7 @@ async function createRoom() {
       if (!result?.success) {
         roomRole = null;
         setStatus(result?.message || "تعذّر إنشاء الجلسة");
+        roomOperationInFlight = false;
         return;
       }
 
@@ -651,19 +692,19 @@ async function createRoom() {
 
       setStatus("تم إنشاء الجلسة. أرسل الرابط وانتظر انضمام الطرف الآخر.");
       log("ROOM_CREATED", roomId);
-
-      // IMPORTANT: no offer here.
-      // The server emits user-joined only after the second peer joins.
+      roomOperationInFlight = false;
     });
   } catch (error) {
     console.error("[WebRTC] createRoom failed", error);
     roomRole = null;
     setStatus("تعذّر إنشاء الجلسة");
+    roomOperationInFlight = false;
   }
 }
 
 async function joinRoom(targetRoomId) {
-  if (roomId) return;
+  if (roomOperationInFlight || roomId) return;
+  roomOperationInFlight = true;
 
   sessionEnded = false;
   roomRole = "guest";
@@ -676,6 +717,7 @@ async function joinRoom(targetRoomId) {
       if (!result?.success) {
         roomRole = null;
         setStatus(result?.message || "تعذّر الانضمام للجلسة");
+        roomOperationInFlight = false;
         return;
       }
 
@@ -691,19 +733,18 @@ async function joinRoom(targetRoomId) {
 
       setStatus("تم الانضمام. في انتظار اتصال الطرف الآخر…");
       log("ROOM_JOINED", roomId);
-
-      // Guest never creates the initial offer.
-      // The creator creates exactly one offer after user-joined.
+      roomOperationInFlight = false;
     });
   } catch (error) {
     console.error("[WebRTC] joinRoom failed", error);
     roomRole = null;
     setStatus("تعذّر الانضمام للجلسة");
+    roomOperationInFlight = false;
   }
 }
 
 socket.on("session-ready", async () => {
-  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
+  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
 
   sessionReadyReceived = true;
   ensurePeerConnection();
@@ -715,15 +756,13 @@ socket.on("session-ready", async () => {
   }
 
   initialOfferTimer = setTimeout(async () => {
-    if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
+    if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
     await createOffer();
   }, 0);
 });
 
 socket.on("user-joined", async () => {
-  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
-
-  // Legacy compatibility fallback only.
+  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
   await createOffer();
 });
 
@@ -746,8 +785,6 @@ socket.on("connect", async () => {
 
   if (reconnecting && roomId && sessionToken) {
     setStatus("عاد اتصال الخادم، جاري استعادة الجلسة…");
-    // The current server binds the session to a socket ID.
-    // Do not create another PeerConnection or another offer here.
     reconnecting = false;
   } else if (!roomId) {
     setStatus("متصل بالخادم");
