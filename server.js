@@ -159,8 +159,6 @@ function removeSocketFromRoom(socketId, reason) {
 app.get('/ice-config', async (_req, res) => {
   res.set('Cache-Control', 'no-store');
 
-  // Preferred production path: mint short-lived Cloudflare TURN credentials server-side.
-  // Keep both secrets in Railway Variables; never expose them to the browser.
   const cloudflareTurnKeyId = (process.env.CLOUDFLARE_TURN_KEY_ID || '').trim();
   const cloudflareTurnApiToken = (process.env.CLOUDFLARE_TURN_API_TOKEN || '').trim();
 
@@ -198,7 +196,6 @@ app.get('/ice-config', async (_req, res) => {
     }
   }
 
-  // Backward-compatible path for an existing self-hosted/provider TURN server.
   const iceServers = [...FALLBACK_ICE_SERVERS];
   const turnUrls = (process.env.TURN_URL || '')
     .split(',')
