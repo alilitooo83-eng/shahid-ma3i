@@ -509,12 +509,11 @@ async function switchCamera() {
   const currentSettings = oldVideoTrack.getSettings();
   const currentMode = currentSettings.facingMode || currentFacingMode;
   const nextMode = currentMode === "environment" ? "user" : "environment";
-  const previousStream = localStream;
-  const previousVideoElementStream = localVideo ? localVideo.srcObject : null;
-  const previousFacingMode = currentFacingMode;
-  const previousVideoTrack = oldVideoTrack;
-
-  let nextStream;
+  let nextStream = null;
+  let nextVideoTrack = null;
+  const sender = peerConnection
+    ? peerConnection.getSenders().find((item) => item.track?.kind === "video")
+    : null;
 
   try {
     nextStream = await navigator.mediaDevices.getUserMedia({
@@ -536,23 +535,13 @@ async function switchCamera() {
       });
     } catch (deviceError) {
       console.error("[WebRTC] switchCamera failed", deviceError);
-      try {
-        nextStream = await navigator.mediaDevices.getUserMedia({
-          video: currentSettings.facingMode
-            ? { facingMode: { exact: currentSettings.facingMode } }
-            : { facingMode: currentFacingMode },
-          audio: false
-        });
-      } catch (restoreError) {
-        console.error("[WebRTC] camera restore failed", restoreError);
-        setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
-        cameraSwitchInFlight = false;
-        return;
-      }
+      setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
+      cameraSwitchInFlight = false;
+      return;
     }
   }
 
-  const nextVideoTrack = nextStream?.getVideoTracks()[0];
+  nextVideoTrack = nextStream?.getVideoTracks()[0] || null;
   if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
     stopTracks(nextStream);
     setStatus("لم يتم العثور على مسار الكاميرا الجديدة");
@@ -560,16 +549,17 @@ async function switchCamera() {
     return;
   }
 
-  const sender = peerConnection
-    ? peerConnection.getSenders().find((item) => item.track?.kind === "video")
-    : null;
-
   try {
+    nextVideoTrack.enabled = true;
     if (sender) {
       await sender.replaceTrack(nextVideoTrack);
     }
 
-    localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
+    const newAudioTracks = audioTracks.filter((track) => track.readyState === "live");
+    const oldStream = localStream;
+    const oldTrackToStop = oldVideoTrack;
+
+    localStream = new MediaStream([nextVideoTrack, ...newAudioTracks]);
     currentFacingMode = nextMode;
 
     if (localVideo) {
@@ -579,16 +569,20 @@ async function switchCamera() {
       }
     }
 
-    if (previousVideoTrack && previousVideoTrack !== nextVideoTrack) {
-      previousVideoTrack.stop();
+    if (oldTrackToStop && oldTrackToStop !== nextVideoTrack) {
+      oldTrackToStop.stop();
     }
 
-    if (previousStream && previousStream !== localStream) {
-      previousStream.getTracks().forEach((track) => {
-        if (track.kind !== "audio" && track !== nextVideoTrack && track !== previousVideoTrack) {
+    if (oldStream && oldStream !== localStream) {
+      oldStream.getTracks().forEach((track) => {
+        if (track.kind === "audio" && !newAudioTracks.includes(track)) {
           track.stop();
         }
       });
+    }
+
+    if (nextStream) {
+      stopTracks(nextStream);
     }
 
     setStatus("تم تبديل الكاميرا ✅");
@@ -596,30 +590,22 @@ async function switchCamera() {
     console.error("[WebRTC] switchCamera failed after opening new camera", error);
 
     try {
-      if (sender && previousVideoTrack && previousVideoTrack.readyState === "live") {
-        await sender.replaceTrack(previousVideoTrack);
+      if (sender && oldVideoTrack && oldVideoTrack.readyState === "live") {
+        await sender.replaceTrack(oldVideoTrack);
       }
     } catch (restoreTrackError) {
       console.error("[WebRTC] failed to restore previous camera track", restoreTrackError);
     }
 
-    localStream = new MediaStream([previousVideoTrack, ...audioTracks]);
-    currentFacingMode = previousFacingMode;
-
-    if (localVideo) {
-      localVideo.srcObject = previousVideoElementStream || localStream;
-      if (typeof localVideo.play === "function") {
-        await localVideo.play().catch(() => {});
-      }
+    if (nextVideoTrack && nextVideoTrack.readyState === "live") {
+      nextVideoTrack.stop();
     }
-
     stopTracks(nextStream);
     setStatus("تعذّر تبديل الكاميرا. تم استرجاع الكاميرا السابقة.");
     cameraSwitchInFlight = false;
     return;
   }
 
-  stopTracks(nextStream);
   cameraSwitchInFlight = false;
 }
 
@@ -758,86 +744,80 @@ socket.on("session-ready", async () => {
   initialOfferTimer = setTimeout(async () => {
     if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
     await createOffer();
-  }, 0);
-});
-
-socket.on("user-joined", async () => {
-  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
-  await createOffer();
+  }, 400);
 });
 
 socket.on("offer", handleOffer);
 socket.on("answer", handleAnswer);
 socket.on("ice-candidate", handleCandidate);
 
-socket.on("room-ended", async () => {
-  setStatus("أنهى منشئ الجلسة الاتصال");
-  await cleanupLocalSession();
-});
-
-socket.on("peer-left", async () => {
+socket.on("peer-left", (payload) => {
+  if (payload?.roomId && payload.roomId !== roomId) return;
   setStatus("غادر الطرف الآخر الجلسة");
+});
+
+socket.on("room-ended", async (payload) => {
+  if (payload?.roomId && payload.roomId !== roomId) return;
   await cleanupLocalSession();
 });
 
-socket.on("connect", async () => {
+socket.on("connect", () => {
   log("SOCKET_CONNECTED", socket.id);
-
-  if (reconnecting && roomId && sessionToken) {
-    setStatus("عاد اتصال الخادم، جاري استعادة الجلسة…");
-    reconnecting = false;
-  } else if (!roomId) {
-    setStatus("متصل بالخادم");
+  if (reconnecting && roomId && sessionToken && !sessionEnded) {
+    emitWithSession("resume-session", {
+      roomId,
+      sessionToken
+    });
+  }
+  reconnecting = false;
+  if (!sessionEnded && roomId && roomRole === "creator" && sessionReadyReceived && !initialOfferSent && !offerInFlight) {
+    createOffer();
   }
 });
 
-socket.on("disconnect", () => {
-  if (!sessionEnded && roomId) {
-    reconnecting = true;
-    setStatus("انقطع اتصال الخادم، جارٍ إعادة الاتصال…");
-  }
+socket.on("disconnect", (reason) => {
+  log("SOCKET_DISCONNECTED", reason);
+  reconnecting = true;
 });
 
-socket.on("connect_error", (error) => {
-  console.error("[Socket.io] connect_error", error);
-  if (!sessionEnded) setStatus("تعذّر الاتصال بالخادم");
-});
-
-cameraBtn?.addEventListener("click", async () => {
-  try {
+if (cameraBtn) {
+  cameraBtn.addEventListener("click", async () => {
     await ensureLocalStream();
-  } catch (error) {
-    console.error(error);
-    setStatus("تعذّر تشغيل الكاميرا");
-  }
-});
+    setStatus("تم تشغيل الكاميرا ✅");
+  });
+}
 
-switchCameraBtn?.addEventListener("click", async () => {
-  try {
+if (switchCameraBtn) {
+  switchCameraBtn.addEventListener("click", async () => {
     await switchCamera();
-  } catch (error) {
-    console.error(error);
-    setStatus("تعذّر تبديل الكاميرا");
-  }
-});
+  });
+}
 
-createRoomBtn?.addEventListener("click", createRoom);
+if (createRoomBtn) {
+  createRoomBtn.addEventListener("click", async () => {
+    await createRoom();
+  });
+}
 
-joinBtn?.addEventListener("click", async () => {
-  const code = (joinInput?.value || invitedRoomId || "").trim().toUpperCase();
+if (joinBtn) {
+  joinBtn.addEventListener("click", async () => {
+    const targetRoomId = (joinInput?.value || invitedRoomId || "").trim().toUpperCase();
+    if (!targetRoomId) {
+      setStatus("أدخل رمز الجلسة أولاً");
+      return;
+    }
+    await joinRoom(targetRoomId);
+  });
+}
 
-  if (!code) {
-    setStatus("أدخل رمز الجلسة");
-    return;
-  }
-
-  await joinRoom(code);
-});
-
-endRoomBtn?.addEventListener("click", endSession);
+if (endRoomBtn) {
+  endRoomBtn.addEventListener("click", async () => {
+    await endSession();
+  });
+}
 
 setInitialUi();
-
+setStatus("جاهز للعمل");
 if (invitedRoomId && joinInput) {
   joinInput.value = invitedRoomId.toUpperCase();
 }
