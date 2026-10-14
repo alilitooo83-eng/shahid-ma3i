@@ -429,6 +429,7 @@ async function switchCamera() {
   oldVideoTrack.stop();
 
   let nextStream;
+  let didSwitch = true;
   try {
     nextStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: nextMode } },
@@ -461,7 +462,7 @@ async function switchCamera() {
         setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
         return;
       }
-      setStatus("تعذّر تبديل الكاميرا؛ أُعيد تشغيل الكاميرا السابقة");
+      didSwitch = false;
     }
   }
 
@@ -486,7 +487,9 @@ async function switchCamera() {
   localVideo.srcObject = localStream;
 
   currentFacingMode = nextVideoTrack.getSettings().facingMode || nextMode;
-  setStatus("تم تبديل الكاميرا ✅");
+  setStatus(didSwitch
+    ? "تم تبديل الكاميرا ✅"
+    : "تعذّر تبديل الكاميرا؛ أُعيد تشغيل الكاميرا السابقة");
 }
 
 function showInvite(room) {
