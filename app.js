@@ -474,12 +474,13 @@ async function switchCamera() {
   const currentSettings = oldVideoTrack.getSettings();
   const currentMode = currentSettings.facingMode || currentFacingMode;
   const nextMode = currentMode === "environment" ? "user" : "environment";
-
-  // Some mobile browsers cannot open the other camera while the current one is active.
-  oldVideoTrack.stop();
+  const previousStream = localStream;
+  const previousVideoElementStream = localVideo ? localVideo.srcObject : null;
+  const previousFacingMode = currentFacingMode;
+  const previousVideoTrack = oldVideoTrack;
 
   let nextStream;
-  let didSwitch = true;
+
   try {
     nextStream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { exact: nextMode } },
@@ -512,37 +513,75 @@ async function switchCamera() {
         setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
         return;
       }
-      didSwitch = false;
     }
   }
 
   const nextVideoTrack = nextStream?.getVideoTracks()[0];
-  if (!nextVideoTrack) {
+  if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
     stopTracks(nextStream);
     setStatus("لم يتم العثور على مسار الكاميرا الجديدة");
     return;
   }
 
-  if (peerConnection) {
-    const sender = peerConnection
-      .getSenders()
-      .find((item) => item.track?.kind === "video");
+  const sender = peerConnection
+    ? peerConnection.getSenders().find((item) => item.track?.kind === "video")
+    : null;
 
+  try {
     if (sender) {
       await sender.replaceTrack(nextVideoTrack);
     }
-  }
 
-  localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
-  localVideo.srcObject = localStream;
-  currentFacingMode = nextMode;
-  stopTracks(nextStream);
+    localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
+    currentFacingMode = nextMode;
 
-  if (didSwitch) {
+    if (localVideo) {
+      localVideo.srcObject = localStream;
+      if (typeof localVideo.play === "function") {
+        await localVideo.play().catch(() => {});
+      }
+    }
+
+    if (previousVideoTrack && previousVideoTrack !== nextVideoTrack) {
+      previousVideoTrack.stop();
+    }
+
+    if (previousStream && previousStream !== localStream) {
+      previousStream.getTracks().forEach((track) => {
+        if (track.kind !== "audio" && track !== nextVideoTrack && track !== previousVideoTrack) {
+          track.stop();
+        }
+      });
+    }
+
     setStatus("تم تبديل الكاميرا ✅");
-  } else {
-    setStatus("تعذّر تبديل الكاميرا، لكن تم الحفاظ على الكاميرا الحالية ✅");
+  } catch (error) {
+    console.error("[WebRTC] switchCamera failed after opening new camera", error);
+
+    try {
+      if (sender && previousVideoTrack && previousVideoTrack.readyState === "live") {
+        await sender.replaceTrack(previousVideoTrack);
+      }
+    } catch (restoreTrackError) {
+      console.error("[WebRTC] failed to restore previous camera track", restoreTrackError);
+    }
+
+    localStream = new MediaStream([previousVideoTrack, ...audioTracks]);
+    currentFacingMode = previousFacingMode;
+
+    if (localVideo) {
+      localVideo.srcObject = previousVideoElementStream || localStream;
+      if (typeof localVideo.play === "function") {
+        await localVideo.play().catch(() => {});
+      }
+    }
+
+    stopTracks(nextStream);
+    setStatus("تعذّر تبديل الكاميرا. تم استرجاع الكاميرا السابقة.");
+    return;
   }
+
+  stopTracks(nextStream);
 }
 
 function showInvite(room) {
@@ -586,25 +625,6 @@ function showInvite(room) {
   };
 }
 
-async function triggerInitialOffer() {
-  if (roomRole !== "creator" || sessionEnded || initialOfferSent || !sessionReadyReceived || !joinResponseReceived) {
-    return;
-  }
-
-  ensurePeerConnection();
-  addLocalTracksOnce();
-
-  if (initialOfferTimer) {
-    clearTimeout(initialOfferTimer);
-  }
-
-  initialOfferTimer = setTimeout(async () => {
-    initialOfferTimer = null;
-    if (sessionEnded || initialOfferSent || !sessionReadyReceived || !joinResponseReceived) return;
-    await createOffer(false);
-  }, 0);
-}
-
 async function createRoom() {
   if (roomId || sessionEnded === false && roomRole) return;
 
@@ -632,7 +652,8 @@ async function createRoom() {
       setStatus("تم إنشاء الجلسة. أرسل الرابط وانتظر انضمام الطرف الآخر.");
       log("ROOM_CREATED", roomId);
 
-      // The server-driven ready event will start the initial offer.
+      // IMPORTANT: no offer here.
+      // The server emits user-joined only after the second peer joins.
     });
   } catch (error) {
     console.error("[WebRTC] createRoom failed", error);
@@ -660,7 +681,6 @@ async function joinRoom(targetRoomId) {
 
       roomId = result.roomId;
       sessionToken = result.sessionToken;
-      joinResponseReceived = true;
 
       ensurePeerConnection();
       addLocalTracksOnce();
@@ -673,7 +693,7 @@ async function joinRoom(targetRoomId) {
       log("ROOM_JOINED", roomId);
 
       // Guest never creates the initial offer.
-      // The creator creates exactly one offer after session-ready.
+      // The creator creates exactly one offer after user-joined.
     });
   } catch (error) {
     console.error("[WebRTC] joinRoom failed", error);
@@ -682,13 +702,29 @@ async function joinRoom(targetRoomId) {
   }
 }
 
-socket.on("session-ready", async (payload) => {
-  if (sessionEnded || roomRole !== "creator") return;
-  if (roomId && payload?.roomId && payload.roomId !== roomId) return;
+socket.on("session-ready", async () => {
+  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
 
   sessionReadyReceived = true;
-  log("SESSION_READY_RECEIVED", payload?.roomId || roomId || "");
-  await triggerInitialOffer();
+  ensurePeerConnection();
+  addLocalTracksOnce();
+
+  if (initialOfferTimer) {
+    clearTimeout(initialOfferTimer);
+    initialOfferTimer = null;
+  }
+
+  initialOfferTimer = setTimeout(async () => {
+    if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
+    await createOffer();
+  }, 0);
+});
+
+socket.on("user-joined", async () => {
+  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight) return;
+
+  // Legacy compatibility fallback only.
+  await createOffer();
 });
 
 socket.on("offer", handleOffer);
@@ -710,6 +746,8 @@ socket.on("connect", async () => {
 
   if (reconnecting && roomId && sessionToken) {
     setStatus("عاد اتصال الخادم، جاري استعادة الجلسة…");
+    // The current server binds the session to a socket ID.
+    // Do not create another PeerConnection or another offer here.
     reconnecting = false;
   } else if (!roomId) {
     setStatus("متصل بالخادم");
