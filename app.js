@@ -506,15 +506,65 @@ async function switchCamera() {
   }
 
   const audioTracks = localStream.getAudioTracks();
-  const currentSettings = oldVideoTrack.getSettings();
+  const currentSettings = oldVideoTrack.getSettings ? oldVideoTrack.getSettings() : {};
   const currentMode = currentSettings.facingMode || currentFacingMode;
-  const nextMode = currentMode === "environment" ? "user" : "environment";
+  const desiredMode = currentMode === "environment" ? "user" : "environment";
   const previousStream = localStream;
-  const previousVideoElementStream = localVideo ? localVideo.srcObject : null;
   const previousFacingMode = currentFacingMode;
   const previousVideoTrack = oldVideoTrack;
+  let nextStream = null;
 
-  let nextStream;
+  const cameraConstraints = (mode, deviceId) => ({
+    video: deviceId
+      ? { deviceId: { exact: deviceId } }
+      : { facingMode: { ideal: mode } },
+    audio: false
+  });
+
+  const requestFreshStream = async () => {
+    try {
+      return await navigator.mediaDevices.getUserMedia(cameraConstraints(desiredMode));
+    } catch (firstError) {
+      let lastError = firstError;
+
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { exact: desiredMode } },
+          audio: false
+        });
+      } catch (secondError) {
+        lastError = secondError;
+      }
+
+      if (typeof navigator.mediaDevices.enumerateDevices === "function") {
+        try {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cameras = devices.filter((device) => device.kind === "videoinput");
+          const currentDeviceId = currentSettings.deviceId || previousVideoTrack.getSettings?.().deviceId;
+          const fallbackCamera = cameras.find((camera) => camera.deviceId !== currentDeviceId) || cameras[0];
+
+          if (fallbackCamera) {
+            return await navigator.mediaDevices.getUserMedia(cameraConstraints(desiredMode, fallbackCamera.deviceId));
+          }
+        } catch (deviceError) {
+          lastError = deviceError;
+        }
+      }
+
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: currentSettings.facingMode
+            ? { facingMode: { ideal: currentSettings.facingMode } }
+            : { facingMode: { ideal: currentFacingMode } },
+          audio: false
+        });
+      } catch (restoreError) {
+        lastError = restoreError;
+      }
+
+      throw lastError;
+    }
+  };
 
   try {
     log("SWITCH_START", {
@@ -522,161 +572,78 @@ async function switchCamera() {
       connectionState: peerConnection?.connectionState || null,
       iceConnectionState: peerConnection?.iceConnectionState || null
     });
-    log("BEFORE_GET_USER_MEDIA", { requestedFacingMode: nextMode });
 
-    try {
-      nextStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: nextMode } },
-        audio: false
-      });
-
-      const nextTrack = nextStream.getVideoTracks()[0];
-      log("GET_USER_MEDIA_SUCCESS", {
-        deviceId: nextTrack?.getSettings?.().deviceId || null,
-        facingMode: nextTrack?.getSettings?.().facingMode || null,
-        readyState: nextTrack?.readyState || null,
-        label: nextTrack?.label || null
-      });
-    } catch (modeError) {
-      console.error("[WebRTC] GET_USER_MEDIA_FAILED", {
-        error: modeError,
-        name: modeError?.name,
-        message: modeError?.message
-      });
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const cameras = devices.filter((device) => device.kind === "videoinput");
-        const currentDeviceId = currentSettings.deviceId;
-        const nextCamera = cameras.find((camera) => camera.deviceId !== currentDeviceId);
-
-        if (!nextCamera) throw modeError;
-
-        nextStream = await navigator.mediaDevices.getUserMedia({
-          video: { deviceId: { exact: nextCamera.deviceId } },
-          audio: false
-        });
-
-        const nextTrack = nextStream.getVideoTracks()[0];
-        log("GET_USER_MEDIA_SUCCESS", {
-          deviceId: nextTrack?.getSettings?.().deviceId || null,
-          facingMode: nextTrack?.getSettings?.().facingMode || null,
-          readyState: nextTrack?.readyState || null,
-          label: nextTrack?.label || null
-        });
-      } catch (deviceError) {
-        console.error("[WebRTC] switchCamera failed", deviceError);
-        try {
-          nextStream = await navigator.mediaDevices.getUserMedia({
-            video: currentSettings.facingMode
-              ? { facingMode: { exact: currentSettings.facingMode } }
-              : { facingMode: currentFacingMode },
-            audio: false
-          });
-
-          const nextTrack = nextStream.getVideoTracks()[0];
-          log("GET_USER_MEDIA_SUCCESS", {
-            deviceId: nextTrack?.getSettings?.().deviceId || null,
-            facingMode: nextTrack?.getSettings?.().facingMode || null,
-            readyState: nextTrack?.readyState || null,
-            label: nextTrack?.label || null
-          });
-        } catch (restoreError) {
-          console.error("[WebRTC] camera restore failed", restoreError);
-          setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
-          cameraSwitchInFlight = false;
-          return;
-        }
-      }
-    }
-
+    nextStream = await requestFreshStream();
     const nextVideoTrack = nextStream?.getVideoTracks()[0];
+
     if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
       stopTracks(nextStream);
-      setStatus("لم يتم العثور على مسار الكاميرا الجديدة");
-      cameraSwitchInFlight = false;
-      return;
+      throw new Error("new camera track unavailable");
     }
 
     const sender = peerConnection
       ? peerConnection.getSenders().find((item) => item.track?.kind === "video")
       : null;
 
-    try {
-      log("BEFORE_REPLACE_TRACK", {
-        senderExists: Boolean(sender),
-        nextTrackReadyState: nextVideoTrack.readyState
-      });
-      if (sender) {
-        await sender.replaceTrack(nextVideoTrack);
+    if (sender) {
+      await sender.replaceTrack(nextVideoTrack);
+    }
+
+    const nextAudioTracks = audioTracks.filter((track) => track.readyState === "live");
+    localStream = new MediaStream([nextVideoTrack, ...nextAudioTracks]);
+    currentFacingMode = desiredMode;
+
+    if (localVideo) {
+      localVideo.srcObject = localStream;
+      if (typeof localVideo.play === "function") {
+        await localVideo.play().catch(() => {});
       }
-      log("REPLACE_TRACK_SUCCESS", {
-        senderExists: Boolean(sender)
-      });
+    }
 
-      localStream = new MediaStream([nextVideoTrack, ...audioTracks]);
-      currentFacingMode = nextMode;
-
-      if (localVideo) {
-        localVideo.srcObject = localStream;
-        if (typeof localVideo.play === "function") {
-          await localVideo.play().catch(() => {});
-        }
-      }
-      log("LOCAL_VIDEO_UPDATED");
-
-      if (previousVideoTrack && previousVideoTrack !== nextVideoTrack) {
-        previousVideoTrack.stop();
-        log("OLD_TRACK_STOPPED", {
-          previousFacingMode
-        });
-      }
-
-      if (previousStream && previousStream !== localStream) {
-        previousStream.getTracks().forEach((track) => {
-          if (track.kind !== "audio" && track !== nextVideoTrack && track !== previousVideoTrack) {
-            track.stop();
-          }
-        });
-      }
-
-      setStatus("تم تبديل الكاميرا ✅");
-      log("SWITCH_COMPLETED");
-    } catch (error) {
-      console.error("[WebRTC] REPLACE_TRACK_FAILED", {
-        error,
-        name: error?.name,
-        message: error?.message
-      });
-      console.error("[WebRTC] SWITCH_FAILED", error?.stack || error);
-
-      try {
-        if (sender && previousVideoTrack && previousVideoTrack.readyState === "live") {
-          await sender.replaceTrack(previousVideoTrack);
-        }
-      } catch (restoreTrackError) {
-        console.error("[WebRTC] failed to restore previous camera track", restoreTrackError);
-      }
-
-      localStream = new MediaStream([previousVideoTrack, ...audioTracks]);
-      currentFacingMode = previousFacingMode;
-
-      if (localVideo) {
-        localVideo.srcObject = previousVideoElementStream || localStream;
-        if (typeof localVideo.play === "function") {
-          await localVideo.play().catch(() => {});
-        }
-      }
-
-      stopTracks(nextStream);
-      setStatus("تعذّر تبديل الكاميرا. تم استرجاع الكاميرا السابقة.");
-      cameraSwitchInFlight = false;
-      return;
+    if (previousVideoTrack && previousVideoTrack !== nextVideoTrack) {
+      previousVideoTrack.stop();
     }
 
     stopTracks(nextStream);
-    cameraSwitchInFlight = false;
+    if (previousStream && previousStream !== localStream) {
+      previousStream.getTracks().forEach((track) => {
+        if (track.kind === "video" || track.kind === "audio") {
+          if (track !== nextVideoTrack && !nextAudioTracks.includes(track)) {
+            track.stop();
+          }
+        }
+      });
+    }
+
+    setStatus("تم تبديل الكاميرا ✅");
+    log("SWITCH_COMPLETED", { facingMode: currentFacingMode });
   } catch (error) {
     console.error("[WebRTC] SWITCH_FAILED", error?.stack || error);
+
+    try {
+      if (peerConnection) {
+        const sender = peerConnection.getSenders().find((item) => item.track?.kind === "video");
+        if (sender && previousVideoTrack && previousVideoTrack.readyState === "live") {
+          await sender.replaceTrack(previousVideoTrack);
+        }
+      }
+    } catch (restoreTrackError) {
+      console.error("[WebRTC] failed to restore previous camera track", restoreTrackError);
+    }
+
+    localStream = new MediaStream([previousVideoTrack, ...audioTracks]);
+    currentFacingMode = previousFacingMode;
+
+    if (localVideo) {
+      localVideo.srcObject = localStream;
+      if (typeof localVideo.play === "function") {
+        await localVideo.play().catch(() => {});
+      }
+    }
+
+    if (nextStream) stopTracks(nextStream);
+    setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
+  } finally {
     cameraSwitchInFlight = false;
   }
 }
@@ -758,112 +725,3 @@ async function createRoom() {
     setStatus("تعذّر إنشاء الجلسة");
     roomOperationInFlight = false;
   }
-}
-
-async function joinRoom(targetRoomId) {
-  if (roomOperationInFlight || roomId) return;
-  roomOperationInFlight = true;
-
-  sessionEnded = false;
-  roomRole = "guest";
-
-  try {
-    await loadIceConfig();
-    await ensureLocalStream();
-
-    socket.emit("join-room", { roomId: targetRoomId }, async (result) => {
-      if (!result?.success) {
-        roomRole = null;
-        setStatus(result?.message || "تعذّر الانضمام للجلسة");
-        roomOperationInFlight = false;
-        return;
-      }
-
-      roomId = result.roomId;
-      sessionToken = result.sessionToken;
-
-      ensurePeerConnection();
-      addLocalTracksOnce();
-
-      sessionArea.hidden = false;
-      joinSection.hidden = true;
-      sessionCodeEl.textContent = roomId;
-
-      setStatus("تم الانضمام. في انتظار اتصال الطرف الآخر…");
-      log("ROOM_JOINED", roomId);
-      roomOperationInFlight = false;
-    });
-  } catch (error) {
-    console.error("[WebRTC] joinRoom failed", error);
-    roomRole = null;
-    setStatus("تعذّر الانضمام للجلسة");
-    roomOperationInFlight = false;
-  }
-}
-
-socket.on("session-ready", async () => {
-  if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
-
-  sessionReadyReceived = true;
-  ensurePeerConnection();
-  addLocalTracksOnce();
-
-  if (initialOfferTimer) {
-    clearTimeout(initialOfferTimer);
-    initialOfferTimer = null;
-  }
-
-  initialOfferTimer = setTimeout(async () => {
-    if (sessionEnded || roomRole !== "creator" || initialOfferSent || offerInFlight || signalingTransitionInFlight) return;
-    await createOffer();
-  }, 300);
-});
-
-socket.on("offer", handleOffer);
-socket.on("answer", handleAnswer);
-socket.on("ice-candidate", handleCandidate);
-socket.on("room-ended", async () => {
-  if (sessionEnded) return;
-  sessionEnded = true;
-  setStatus("انتهت الجلسة");
-  await cleanupLocalSession();
-});
-
-socket.on("peer-left", async () => {
-  if (sessionEnded) return;
-  setStatus("غادر الطرف الآخر الجلسة");
-  await cleanupLocalSession();
-});
-
-async function initializeFromUrl() {
-  if (!invitedRoomId) return;
-  joinInput.value = invitedRoomId;
-  await joinRoom(invitedRoomId);
-}
-
-cameraBtn.addEventListener("click", () => withLock("cameraBtn", ensureLocalStream));
-switchCameraBtn.addEventListener("click", () => withLock("switchCamera", switchCamera));
-createRoomBtn.addEventListener("click", () => withLock("createRoom", createRoom));
-joinBtn.addEventListener("click", () => withLock("joinRoom", () => joinRoom(joinInput.value.trim())));
-endRoomBtn.addEventListener("click", () => withLock("endSession", endSession));
-
-socket.on("connect", () => {
-  log("SOCKET_CONNECTED", socket.id);
-  if (reconnecting && roomId && sessionToken && roomRole === "creator") {
-    createOffer(true).catch(() => {});
-  }
-  reconnecting = false;
-});
-
-socket.on("disconnect", (reason) => {
-  log("SOCKET_DISCONNECTED", reason);
-  reconnecting = true;
-});
-
-socket.on("connect_error", (error) => {
-  console.error("[WebRTC] SOCKET_CONNECT_ERROR", error);
-});
-
-setInitialUi();
-setStatus("جاهز للعمل");
-initializeFromUrl();
