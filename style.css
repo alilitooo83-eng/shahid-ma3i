@@ -185,6 +185,32 @@ input {
   border-radius: 10px;
 }
 
+.control-button,
+.floating-control-button,
+#cameraBtn,
+#switchCameraBtn,
+#createRoomBtn,
+#joinBtn,
+#endRoomBtn,
+#copyInviteBtn,
+#shareInviteBtn {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  min-height: 48px;
+  max-width: 48px;
+  max-height: 48px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 48px;
+  font-size: 22px;
+  line-height: 1;
+}
+
 @media (max-width: 768px) {
   .container {
     width: 100%;
@@ -195,11 +221,6 @@ input {
   .buttons,
   .invite-actions {
     flex-direction: column;
-  }
-
-  #video {
-    width: 110px;
-    height: 150px;
   }
 
   button {
