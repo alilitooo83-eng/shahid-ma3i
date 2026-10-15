@@ -505,14 +505,17 @@ async function switchCamera() {
     return;
   }
 
-  const audioTracks = localStream.getAudioTracks();
-  const currentSettings = oldVideoTrack.getSettings ? oldVideoTrack.getSettings() : {};
+  const oldLocalStream = localStream;
+  const previousVideoTrack = oldVideoTrack;
+  const audioTracks = oldLocalStream.getAudioTracks().filter((track) => track.readyState === "live");
+  const previousFacingMode = currentFacingMode;
+  const currentSettings = previousVideoTrack.getSettings ? previousVideoTrack.getSettings() : {};
   const currentMode = currentSettings.facingMode || currentFacingMode;
   const desiredMode = currentMode === "environment" ? "user" : "environment";
-  const previousStream = localStream;
-  const previousFacingMode = currentFacingMode;
-  const previousVideoTrack = oldVideoTrack;
   let nextStream = null;
+  let nextVideoTrack = null;
+  let sender = null;
+  let replacedSuccessfully = false;
 
   const cameraConstraints = (mode, deviceId) => ({
     video: deviceId
@@ -574,23 +577,26 @@ async function switchCamera() {
     });
 
     nextStream = await requestFreshStream();
-    const nextVideoTrack = nextStream?.getVideoTracks()[0];
+    nextVideoTrack = nextStream?.getVideoTracks()[0] || null;
 
     if (!nextVideoTrack || nextVideoTrack.readyState !== "live") {
-      stopTracks(nextStream);
       throw new Error("new camera track unavailable");
     }
 
-    const sender = peerConnection
+    sender = peerConnection
       ? peerConnection.getSenders().find((item) => item.track?.kind === "video")
       : null;
 
     if (sender) {
       await sender.replaceTrack(nextVideoTrack);
+      replacedSuccessfully = true;
+    } else {
+      replacedSuccessfully = true;
     }
 
-    const nextAudioTracks = audioTracks.filter((track) => track.readyState === "live");
-    localStream = new MediaStream([nextVideoTrack, ...nextAudioTracks]);
+    const preservedAudioTracks = audioTracks.filter((track) => track.readyState === "live");
+    const activeTracks = [nextVideoTrack, ...preservedAudioTracks];
+    localStream = new MediaStream(activeTracks);
     currentFacingMode = desiredMode;
 
     if (localVideo) {
@@ -600,17 +606,14 @@ async function switchCamera() {
       }
     }
 
-    if (previousVideoTrack && previousVideoTrack !== nextVideoTrack) {
+    if (previousVideoTrack && previousVideoTrack !== nextVideoTrack && previousVideoTrack.readyState === "live") {
       previousVideoTrack.stop();
     }
 
-    stopTracks(nextStream);
-    if (previousStream && previousStream !== localStream) {
-      previousStream.getTracks().forEach((track) => {
-        if (track.kind === "video" || track.kind === "audio") {
-          if (track !== nextVideoTrack && !nextAudioTracks.includes(track)) {
-            track.stop();
-          }
+    if (nextStream && nextStream !== localStream) {
+      nextStream.getTracks().forEach((track) => {
+        if (track !== nextVideoTrack && track.readyState === "live") {
+          track.stop();
         }
       });
     }
@@ -621,17 +624,22 @@ async function switchCamera() {
     console.error("[WebRTC] SWITCH_FAILED", error?.stack || error);
 
     try {
-      if (peerConnection) {
-        const sender = peerConnection.getSenders().find((item) => item.track?.kind === "video");
-        if (sender && previousVideoTrack && previousVideoTrack.readyState === "live") {
-          await sender.replaceTrack(previousVideoTrack);
-        }
+      if (sender && replacedSuccessfully && previousVideoTrack && previousVideoTrack.readyState === "live") {
+        await sender.replaceTrack(previousVideoTrack);
       }
     } catch (restoreTrackError) {
       console.error("[WebRTC] failed to restore previous camera track", restoreTrackError);
     }
 
-    localStream = new MediaStream([previousVideoTrack, ...audioTracks]);
+    if (nextStream) {
+      nextStream.getTracks().forEach((track) => {
+        if (track !== nextVideoTrack && track.readyState === "live") {
+          track.stop();
+        }
+      });
+    }
+
+    localStream = new MediaStream([previousVideoTrack, ...audioTracks.filter((track) => track.readyState === "live")]);
     currentFacingMode = previousFacingMode;
 
     if (localVideo) {
@@ -641,9 +649,15 @@ async function switchCamera() {
       }
     }
 
-    if (nextStream) stopTracks(nextStream);
     setStatus("تعذّر تبديل الكاميرا. أعد تشغيل الكاميرا وحاول مجددًا.");
   } finally {
+    if (nextStream) {
+      nextStream.getTracks().forEach((track) => {
+        if (track !== nextVideoTrack && track.readyState === "live") {
+          track.stop();
+        }
+      });
+    }
     cameraSwitchInFlight = false;
   }
 }
